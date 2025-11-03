@@ -55,7 +55,6 @@ models/
 *.jpg
 *.pdf
 outputs/
-results/
 logs/
 runs/
 wandb/

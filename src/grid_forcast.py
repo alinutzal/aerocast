@@ -17,7 +17,7 @@ import torch
 from torch.utils.data import Dataset
 
 class GridForecastSequenceDataset(Dataset):
-    def __init__(self, meteo_path, conc_path, emis_path, vars_X, var_NO2, var_O3, seq_len=3, t_max=None):
+    def __init__(self, meteo_path, conc_path, emis_path, vars_X, var_NO2, var_O3, seq_len=3, pred_len=10, t_max=None):
         self.ds_meteo = xr.open_dataset(meteo_path, engine="netcdf4")
         self.ds_conc = xr.open_dataset(conc_path, engine="netcdf4")
         self.ds_emis = xr.open_dataset(emis_path, engine="netcdf4")
@@ -26,6 +26,7 @@ class GridForecastSequenceDataset(Dataset):
         self.var_NO2 = var_NO2
         self.var_O3 = var_O3
         self.seq_len = seq_len
+        self.pred_len = pred_len  # Number of future steps to predict
 
         self.X_all = []
         self.Y_all = []
@@ -45,7 +46,7 @@ class GridForecastSequenceDataset(Dataset):
         if t_max:
             self.T = min(self.T, t_max)
 
-        for t in range(self.seq_len, self.T - 1):
+        for t in range(self.seq_len, self.T - self.pred_len):
             x_seq = []
             for dt in range(t - self.seq_len, t):
                 x_vars = []
@@ -68,16 +69,21 @@ class GridForecastSequenceDataset(Dataset):
 
             X_seq = np.stack(x_seq, axis=0)  # shape: (T, C, H, W)
 
-            no2_next = np.squeeze(self.ds_conc[self.var_NO2].isel(TSTEP=t).values)
-            o3_next = np.squeeze(self.ds_conc[self.var_O3].isel(TSTEP=t).values)
-            y_tensor = no2_next + o3_next  # shape: (H, W)
+            # Generate targets for multiple future steps
+            y_seq = []
+            for future_t in range(t, t + self.pred_len):
+                no2_future = np.squeeze(self.ds_conc[self.var_NO2].isel(TSTEP=future_t).values)
+                o3_future = np.squeeze(self.ds_conc[self.var_O3].isel(TSTEP=future_t).values)
+                y_future = no2_future + o3_future  # shape: (H, W)
+                y_seq.append(y_future)
+            Y_seq = np.stack(y_seq, axis=0)  # shape: (pred_len, H, W)
 
             self.X_all.append(torch.tensor(X_seq, dtype=torch.float32))
-            self.Y_all.append(torch.tensor(y_tensor, dtype=torch.float32))
+            self.Y_all.append(torch.tensor(Y_seq, dtype=torch.float32))
         
         # Compute normalization stats per channel
         X_stack = torch.stack(self.X_all)  # (N, T, C, H, W)
-        Y_stack = torch.stack(self.Y_all)  # (N, H, W)
+        Y_stack = torch.stack(self.Y_all)  # (N, pred_len, H, W)
         
         # Mean/std per channel across all samples, timesteps, and spatial dims
         self.X_mean = X_stack.mean(dim=(0, 1, 3, 4))  # (C,)
@@ -106,7 +112,7 @@ class GridForecastSequenceDataset(Dataset):
 meteo_path = "datasets/METCRO2D_20181113.nc"
 conc_path = "datasets/out.combine_20181113.nc"
 # Emissions file resides at repo root, not under datasets/
-emis_path = "egts_l.20181113.1.1km.baaqmd2018_newngc2.ncf"
+emis_path = "datasets/egts_l.20181113.1.1km.baaqmd2018_newngc2.ncf"
 
 # Define predictor variables and targets
 predictor_vars = ['TEMP2', 'WSPD10', 'WDIR10', 'NO', 'NO2', 'PM25_CL', 'ALK1', 'OLE1', 'ARO1', 'ARO2', 'TERP', 'ISOP']
@@ -121,8 +127,9 @@ dataset = GridForecastSequenceDataset(
     vars_X=['TEMP2', 'WSPD10', 'WDIR10', 'NO', 'NO2', 'PM25_CL', 'ALK1', 'OLE1', 'ARO1', 'ARO2', 'TERP', 'ISOP'],
     var_NO2='NO2',
     var_O3='O3',
-    seq_len=3,  # You can set 6, 12, etc.
-    t_max=50    # Optional: limit for debugging
+    seq_len=6,     # Input sequence length - use 6 past time steps
+    pred_len=10,   # Predict 10 future time steps
+    t_max=50       # Optional: limit for debugging
 )
 dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
 
@@ -177,29 +184,51 @@ class StackedConvLSTM(nn.Module):
 
         self.out_conv = nn.Conv2d(hidden_dims[1], 1, kernel_size=1)
 
-    def forward(self, x):
-        # x: (B, T, C, H, W)
+    def forward(self, x, pred_steps=1):
+        # x: (B, T, C, H, W) - process all T time steps
         if x.dim() == 5:
-            x_t = x[:, -1]  # (B, C, H, W)
+            B, T, C, H, W = x.shape
         else:
-            x_t = x  # already (B, C, H, W)
+            # If single time step, add time dimension
+            x = x.unsqueeze(1)
+            B, T, C, H, W = x.shape
 
-        B, C, H, W = x_t.shape
-
+        # Initialize hidden states
         h1 = torch.zeros(B, self.hidden_dims[0], H, W, device=x.device)
         c1 = torch.zeros_like(h1)
-
-        h1, c1 = self.cell1(x_t, h1, c1)
-        h1 = self.bn1(h1)
-
         h2 = torch.zeros(B, self.hidden_dims[1], H, W, device=x.device)
         c2 = torch.zeros_like(h2)
 
-        h2, c2 = self.cell2(h1, h2, c2)
-        h2 = self.bn2(h2)
+        # Process all time steps sequentially through ConvLSTM
+        for t in range(T):
+            x_t = x[:, t]  # (B, C, H, W)
+            
+            h1, c1 = self.cell1(x_t, h1, c1)
+            h1_bn = self.bn1(h1)
+            
+            h2, c2 = self.cell2(h1_bn, h2, c2)
+            h2 = self.bn2(h2)
 
-        out = self.out_conv(h2)  # (B, 1, H, W)
-        return out.squeeze(1)    # (B, H, W)
+        # Generate predictions for multiple future steps
+        # Continue evolving hidden states autoregressively
+        predictions = []
+        x_last = x[:, -1]  # Use last input time step for autoregression
+        
+        for step in range(pred_steps):
+            out = self.out_conv(h2)  # (B, 1, H, W)
+            predictions.append(out.squeeze(1))  # (B, H, W)
+            
+            if step < pred_steps - 1:  # Don't update for last step
+                # Continue evolving hidden states using last input
+                h1, c1 = self.cell1(x_last, h1, c1)
+                h1_bn = self.bn1(h1)
+                h2, c2 = self.cell2(h1_bn, h2, c2)
+                h2 = self.bn2(h2)
+        
+        if pred_steps == 1:
+            return predictions[0]  # (B, H, W)
+        else:
+            return torch.stack(predictions, dim=1)  # (B, pred_steps, H, W)
 
 class ConvLSTMForecast(nn.Module):
     def __init__(self, input_channels, hidden_channels, kernel_size=3, norm_type: str = "batch", num_groups: int = 8, dropout_p: float = 0.0):
@@ -235,17 +264,16 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Normalization and dropout configuration
 NORM_TYPE = "group"   # "group" | "batch"
 NUM_GROUPS = 8        # used when NORM_TYPE == "group"
-DROPOUT_P = 0.1       # dropout after ConvLSTM cell; set 0.0 to disable
+DROPOUT_P = 0.2       # dropout after ConvLSTM cell; set 0.0 to disable
 
-model = ConvLSTMForecast(
+# Use StackedConvLSTM for deeper feature extraction
+model = StackedConvLSTM(
     input_channels=len(predictor_vars),
-    hidden_channels=64,
-    norm_type=NORM_TYPE,
-    num_groups=NUM_GROUPS,
-    dropout_p=DROPOUT_P,
+    hidden_dims=[64, 32],  # 2-layer: 64 -> 32
+    kernel_size=3
 ).to(device)
-optimizer = optim.Adam(model.parameters(), lr=1e-3)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=50, T_mult=2, eta_min=1e-6)
 
 # Loss configuration
 LOSS_TYPE = "mixed"  # "huber" or "mixed"
@@ -273,8 +301,12 @@ print(f"\nTraining on {device}")
 print(f"Dataset size: {len(dataset)} samples")
 print(f"Data normalized: X_mean={dataset.X_mean.mean():.4f}, Y_mean={dataset.Y_mean:.4f}\n")
 
-# Training
-for epoch in range(1000):
+# Training with early stopping
+best_loss = float('inf')
+patience_counter = 0
+patience = 30
+
+for epoch in range(300):
     model.train()
     total_loss = 0.0
     sse_sum = 0.0  # sum of squared errors across all elements
@@ -282,13 +314,15 @@ for epoch in range(1000):
 
     for X_batch, Y_batch in dataloader:
         X_batch = X_batch.to(device)  # (B, T, C, H, W) - sequence data
-        Y_batch = Y_batch.to(device)  # (B, H, W)
+        Y_batch = Y_batch.to(device)  # (B, pred_len, H, W)
 
-        pred = model(X_batch)         # (B, H, W)
+        pred = model(X_batch, pred_steps=dataset.pred_len)  # (B, pred_len, H, W)
         loss = compute_loss(pred, Y_batch)
 
         optimizer.zero_grad()
         loss.backward()
+        # Gradient clipping to prevent exploding gradients
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         total_loss += loss.item()
@@ -298,50 +332,75 @@ for epoch in range(1000):
 
     avg_loss = total_loss / len(dataloader)
     rmse_epoch = (sse_sum / max(1, n_elem)) ** 0.5
-    scheduler.step(avg_loss)
+    scheduler.step()
+    
+    # Early stopping check
+    if avg_loss < best_loss:
+        best_loss = avg_loss
+        patience_counter = 0
+    else:
+        patience_counter += 1
     
     if (epoch + 1) % 5 == 0:
-        print(f"Epoch {epoch+1:03d} - {LOSS_LABEL}: {avg_loss:.4f} | RMSE: {rmse_epoch:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f}")
-
-# Visualize a sample after training
-import random
-sample_idx = random.randint(0, len(dataset) - 1)
-X_sample, Y_sample = dataset[sample_idx]
-
-print(f"\n[Visualization] Sample {sample_idx}")
-print(f"  X_shape: {X_sample.shape}, Y_shape: {Y_sample.shape}")
-
-# Generate prediction for the sample
-model.eval()
-with torch.no_grad():
-    X_sample_batch = X_sample.unsqueeze(0).to(device)  # Add batch dim
-    pred_sample = model(X_sample_batch).cpu().squeeze()
+        print(f"Epoch {epoch+1:03d} - {LOSS_LABEL}: {avg_loss:.4f} | RMSE: {rmse_epoch:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f} | Best: {best_loss:.4f}")
     
-    # Denormalize for visualization
-    Y_sample_denorm = Y_sample * dataset.Y_std + dataset.Y_mean
-    pred_sample_denorm = pred_sample * dataset.Y_std + dataset.Y_mean
-    # Compute RMSE on the sample (denormalized space)
-    sample_rmse = ((pred_sample_denorm - Y_sample_denorm) ** 2).mean().sqrt().item()
-    print(f"Sample RMSE (t+1): {sample_rmse:.3f}")
+    if patience_counter >= patience:
+        print(f"\nEarly stopping at epoch {epoch+1} - no improvement for {patience} epochs")
+        break
 
-# Plot target vs prediction
-plt.figure(figsize=(12, 4))
+# Visualize all samples after training - each in a separate plot
+print(f"\n[Visualization] Generating predictions for all {len(dataset)} samples")
+model.eval()
 
-# Use same color scale for both plots
-vmin = min(Y_sample_denorm.min().item(), pred_sample_denorm.min().item())
-vmax = max(Y_sample_denorm.max().item(), pred_sample_denorm.max().item())
+os.makedirs("results", exist_ok=True)
 
-plt.subplot(1, 2, 1)
-im1 = plt.imshow(Y_sample_denorm.squeeze(), cmap='viridis', vmin=vmin, vmax=vmax)
-plt.title("Target: NO2 + O3 at t+1")
-plt.colorbar(im1)
+with torch.no_grad():
+    for sample_idx in range(len(dataset)):
+        X_sample, Y_sample = dataset[sample_idx]
+        X_sample_batch = X_sample.unsqueeze(0).to(device)  # Add batch dim
+        pred_sample = model(X_sample_batch, pred_steps=dataset.pred_len).cpu().squeeze(0)  # (pred_len, H, W)
+        
+        # Denormalize for visualization
+        Y_sample_denorm = Y_sample * dataset.Y_std + dataset.Y_mean  # (pred_len, H, W)
+        pred_sample_denorm = pred_sample * dataset.Y_std + dataset.Y_mean  # (pred_len, H, W)
+        
+        # Compute overall RMSE for this sample
+        sample_rmse = ((pred_sample_denorm - Y_sample_denorm) ** 2).mean().sqrt().item()
+        
+        print(f"\nSample {sample_idx}: Overall RMSE = {sample_rmse:.3f}")
+        
+        # Compute RMSE per time step
+        for step in range(dataset.pred_len):
+            step_rmse = ((pred_sample_denorm[step] - Y_sample_denorm[step]) ** 2).mean().sqrt().item()
+            print(f"  t+{step+1}: {step_rmse:.3f}")
+        
+        # Create separate plot for this sample
+        fig, axes = plt.subplots(2, dataset.pred_len, figsize=(3*dataset.pred_len, 6))
+        
+        # Use same color scale for all plots in this sample
+        vmin = min(Y_sample_denorm.min().item(), pred_sample_denorm.min().item())
+        vmax = max(Y_sample_denorm.max().item(), pred_sample_denorm.max().item())
+        
+        for step in range(dataset.pred_len):
+            # Target row
+            im1 = axes[0, step].imshow(Y_sample_denorm[step], cmap='viridis', vmin=vmin, vmax=vmax)
+            axes[0, step].set_title(f"Target t+{step+1}", fontsize=10)
+            axes[0, step].axis('off')
+            if step == dataset.pred_len - 1:
+                plt.colorbar(im1, ax=axes[0, step])
+            
+            # Prediction row
+            im2 = axes[1, step].imshow(pred_sample_denorm[step], cmap='viridis', vmin=vmin, vmax=vmax)
+            axes[1, step].set_title(f"Pred t+{step+1}", fontsize=10)
+            axes[1, step].axis('off')
+            if step == dataset.pred_len - 1:
+                plt.colorbar(im2, ax=axes[1, step])
+        
+        plt.suptitle(f"Multi-Step Forecast: NO2 + O3 - Sample {sample_idx}\nOverall RMSE: {sample_rmse:.3f}", fontsize=12)
+        plt.tight_layout()
+        output_path = f"results/grid_forecast_sample_{sample_idx:02d}.png"
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"  Plot saved to: {output_path}")
 
-plt.subplot(1, 2, 2)
-im2 = plt.imshow(pred_sample_denorm, cmap='viridis', vmin=vmin, vmax=vmax)
-plt.title("Pred: NO2 + O3 at t+1")
-plt.colorbar(im2)
-
-plt.tight_layout()
-output_path = "results/grid_forecast_sample.png"
-plt.savefig(output_path, dpi=150, bbox_inches='tight')
-print(f"\nPlot saved to: {output_path}")
+print(f"\nAll {len(dataset)} sample plots saved to results/ directory")
