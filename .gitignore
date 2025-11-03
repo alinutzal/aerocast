@@ -51,10 +51,11 @@ models/
 *.h5
 
 # Output/results
-*.png
+# *.png
 *.jpg
 *.pdf
 outputs/
+# results/
 logs/
 runs/
 wandb/
