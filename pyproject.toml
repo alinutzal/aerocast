@@ -17,6 +17,8 @@ dependencies = [
   "wandb>=0.17",
   "pyyaml>=6.0",
   "neuraloperator==2.0.0",
+  "monai==1.6.1",
+  "einops==0.8.2",
 ]
 
 [project.scripts]

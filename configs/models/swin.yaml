@@ -1,0 +1,18 @@
+# MONAI SwinUNETR in 2D on the time-stacked input: shifted-window transformer encoder,
+# convolutional decoder (most of the parameters). Pads to a multiple of patch_size**5.
+model:
+  name: swin
+  feature_size: 24          # MONAI requires a multiple of 12
+  depths: [2, 2, 2, 1]
+  num_heads: [3, 6, 12, 24]
+  window_size: 7
+  mlp_ratio: 2.0
+  patch_size: 2
+  grad_checkpointing: false
+
+train:
+  amp: bf16
+
+tuning:                     # stage-3 depth; every option stays within 5M +/- 20%
+  knob: depths
+  options: [[2, 2, 2, 1], [2, 2, 3, 1], [2, 2, 4, 1]]

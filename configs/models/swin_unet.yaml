@@ -1,0 +1,18 @@
+# Swin U-Net on the time-stacked input: shifted-window transformer stages on both the
+# encoder and decoder sides (MONAI Swin stages), patch 4, patch merging / expanding.
+model:
+  name: swin_unet
+  embed_dim: 64             # stage widths 64-128-256
+  depths: [2, 2, 4]         # encoder stages (the last is the bottleneck); decoder mirrors the first two
+  num_heads: [2, 4, 8]
+  window_size: 7
+  patch_size: 4
+  mlp_ratio: 4.0
+  grad_checkpointing: false
+
+train:
+  amp: bf16
+
+tuning:                     # (embed_dim, depths, num_heads): wider-shallower to narrower-deeper
+  knob: [embed_dim, depths, num_heads]
+  options: [[56, [2, 2, 6], [2, 4, 8]], [64, [2, 2, 4], [2, 4, 8]], [72, [2, 2, 3], [3, 6, 12]]]

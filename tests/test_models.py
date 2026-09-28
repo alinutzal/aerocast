@@ -20,6 +20,8 @@ SMALL = {
     "convlstm": {"hidden_dims": [16, 8], "kernel_size": 3, "norm": "group", "num_groups": 4},
     "unet": {"width": 8, "levels": 4, "norm_groups": 4},
     "fno": {"hidden_channels": 16, "n_modes": 8, "n_layers": 4},
+    "swin": {"feature_size": 12, "depths": [2, 2, 2, 1], "window_size": 7, "mlp_ratio": 2.0},
+    "swin_unet": {"embed_dim": 16, "depths": [2, 2, 2], "num_heads": [2, 4, 8], "window_size": 7},
 }
 MODELS = sorted(SMALL)
 
@@ -80,8 +82,9 @@ def test_output_shape_on_any_grid(name, size, targets):
 
 @pytest.mark.parametrize("name", MODELS)
 def test_gradients_reach_all_parameters(name):
+    # 36 x 28 so every attention window holds more than one token (a lone token ignores its position bias)
     model = make_model(name).train()
-    model(random_batch()).square().mean().backward()
+    model(random_batch(height=36, width=28)).square().mean().backward()
     for pname, param in model.named_parameters():
         assert param.grad is not None, f"{pname} gets no gradient"
         assert torch.isfinite(param.grad).all() and param.grad.abs().sum() > 0, f"{pname} gradient is zero or not finite"
