@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 
 import numpy as np
 import pandas as pd
@@ -6,7 +7,7 @@ import pytest
 
 from aerocast.config import save_config
 from aerocast.data import WindowDataset
-from aerocast.evaluate import RESULT_COLUMNS, evaluate_run
+from aerocast.evaluate import RESULT_COLUMNS, append_results, evaluate_run
 from aerocast.normalize import NormStats
 from aerocast.splits import SmokeTestWarning, load_and_split
 from aerocast.train import main as train_main
@@ -84,3 +85,18 @@ def test_fixed_seed_repeats_training(make_cfg):
     cfg = make_cfg({"train.epochs": 1})
     histories = [pd.read_csv(train(cfg) / "history.csv") for _ in range(2)]
     pd.testing.assert_frame_equal(*histories)
+
+
+def _append_block(args):
+    path, i = args
+    row = dict.fromkeys(RESULT_COLUMNS, "x")
+    append_results(path, [dict(row, run_id=f"run{i}", lead_hour=k) for k in range(50)])
+
+
+def test_concurrent_appends_share_one_header(tmp_path):
+    path = tmp_path / "results.csv"
+    with multiprocessing.get_context("fork").Pool(4) as pool:
+        pool.map(_append_block, [(path, i) for i in range(8)])
+    results = pd.read_csv(path)
+    assert list(results.columns) == RESULT_COLUMNS
+    assert len(results) == 8 * 50 and results.run_id.nunique() == 8

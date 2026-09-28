@@ -5,6 +5,7 @@ results.csv, and writes per_window_rmse.csv and summary.txt into the run directo
 """
 import argparse
 import csv
+import fcntl
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,17 +29,17 @@ NOTES = {"smoke_test": "IN-SAMPLE smoke test, not a held-out result",
 
 
 def append_results(path, rows):
+    """Append rows under an exclusive lock, so concurrent runs can share one results.csv."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    new = not path.exists() or path.stat().st_size == 0
-    if not new:
-        with open(path, newline="") as f:
-            header = next(csv.reader(f), None)
-        if header != RESULT_COLUMNS:
+    with open(path, "a+", newline="") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        header = next(csv.reader(f), None)
+        if header is not None and header != RESULT_COLUMNS:
             raise ValueError(f"{path} has columns {header}, expected {RESULT_COLUMNS}")
-    with open(path, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=RESULT_COLUMNS)
-        if new:
+        if header is None:
             writer.writeheader()
         writer.writerows(rows)
 
