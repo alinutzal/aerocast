@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 # Sections that name outputs or logging rather than the experiment; excluded from the hash.
-_UNHASHED = ("name", "output", "logging", "tuning")
+_UNHASHED = ("name", "output", "logging", "tuning", "evaluate")
 MODEL_DIR = Path(__file__).resolve().parents[2] / "configs" / "models"
 
 

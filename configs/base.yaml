@@ -72,6 +72,13 @@ train:
   log_every: 5
   amp: none                 # none | bf16 (autocast)
 
+evaluate:                   # scoring settings (not part of the config hash)
+  high_ox_percentile: 95    # high-Ox threshold: this percentile of Ox on training days
+  spectrum_leads: [1, 5, 10]  # lead hours for the power spectra and spectral ratio
+  bootstrap_samples: 1000   # 95% CIs by block bootstrap over days (needs >= 2 days)
+  bootstrap_seed: 0
+  cell_km: 1.0              # grid spacing, for wavenumbers in cycles/km
+
 output:
   runs_dir: runs            # one directory per run: config, git commit, stats, checkpoint
   results_csv: results/results.csv

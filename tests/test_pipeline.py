@@ -34,9 +34,10 @@ def test_two_epoch_train_and_evaluate_writes_results(make_cfg, tmp_path):
     assert list(results.columns) == RESULT_COLUMNS
     assert set(results.split) == {"val", "test"}
     assert set(results.model) == {"convlstm", "persistence", "climatology"}
-    assert set(results.metric) == {"rmse", "mae", "bias", "pearson_r"}
+    assert {"rmse", "mae", "bias", "pearson_r", "csi_p95", "spectral_ratio"} <= set(results.metric)
     assert set(results.lead_hour) == {str(k) for k in range(1, PRED + 1)} | {"all"}
-    assert len(results) == 2 * 3 * (PRED + 1) * 4
+    # Per model and split: 4 metrics + 3 high-Ox metrics per lead and overall, 3 spectral ratios.
+    assert len(results) == 2 * 3 * ((PRED + 1) * 7 + 3)
     assert (results.run_id == run_dir.name).all() and (results.config_hash == meta["config_hash"]).all()
 
     # Every model is scored on exactly the same windows.
