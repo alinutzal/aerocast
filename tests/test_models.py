@@ -19,6 +19,7 @@ T_IN, T_OUT = 6, 10
 SMALL = {
     "convlstm": {"hidden_dims": [16, 8], "kernel_size": 3, "norm": "group", "num_groups": 4},
     "unet": {"width": 8, "levels": 4, "norm_groups": 4},
+    "fno": {"hidden_channels": 16, "n_modes": 8, "n_layers": 4},
 }
 MODELS = sorted(SMALL)
 
@@ -112,3 +113,31 @@ def test_convlstm_rollout_is_causal():
         out = model(changed)
     torch.testing.assert_close(out[:, :4], base[:, :4])
     assert not torch.allclose(out[:, 4], base[:, 4])
+
+
+def test_fno_runs_at_twice_the_resolution(tiny_batch):
+    """Trained on 16 x 12, the FNO predicts on a 32 x 24 version of the same fields."""
+    model = make_model("fno").train()
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+    for _ in range(5):
+        loss = (model(tiny_batch) - tiny_batch["target"]).square().mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    fine = {key: torch.nn.functional.interpolate(value.flatten(0, -3)[None], scale_factor=2, mode="bilinear")[0]
+            .reshape(*value.shape[:-2], 32, 24) for key, value in tiny_batch.items() if key != "target"}
+    with torch.no_grad():
+        out = model.eval()(fine)
+    assert out.shape == (2, T_OUT, 1, 32, 24) and torch.isfinite(out).all()
+
+
+@pytest.mark.parametrize("name", MODELS)
+def test_checkpoint_round_trip_with_weights_only_loading(name, tmp_path):
+    from aerocast.train import model_state
+    model = make_model(name)
+    torch.save({"model_state_dict": model_state(model)}, tmp_path / "best.pt")
+    restored = make_model(name)
+    restored.load_state_dict(torch.load(tmp_path / "best.pt", weights_only=True)["model_state_dict"])
+    batch = random_batch()
+    with torch.no_grad():
+        torch.testing.assert_close(restored.eval()(batch), model.eval()(batch))

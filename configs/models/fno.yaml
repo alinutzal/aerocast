@@ -1,0 +1,15 @@
+# Fourier neural operator (neuraloperator 2.0.0) on the time-stacked input.
+model:
+  name: fno
+  hidden_channels: 64
+  n_modes: 16               # per dimension (neuraloperator convention)
+  n_layers: 4
+  domain_padding: 0.125     # fraction of the grid; the domain is not periodic
+  grad_checkpointing: false
+
+train:
+  amp: none                 # the operator runs in fp32 regardless: FFTs do not support bf16
+
+tuning:                     # (hidden_channels, n_modes); every option stays within 5M +/- 20%
+  knob: [hidden_channels, n_modes]
+  options: [[64, 16], [72, 14], [80, 12]]

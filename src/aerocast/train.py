@@ -72,6 +72,12 @@ def autocast(device, amp):
     raise ValueError(f"Unknown train.amp {amp!r}; expected none or bf16")
 
 
+def model_state(model):
+    """Tensors of the state dict only; libraries may add other entries (neuraloperator stores its
+    constructor arguments, including functions, which weights-only loading rejects)."""
+    return {key: value for key, value in model.state_dict().items() if isinstance(value, torch.Tensor)}
+
+
 def window_datasets(hourly, stats, cfg, starts_by_name):
     """Normalize the hourly arrays once and build a WindowDataset per set of window starts."""
     spec = model_spec(cfg)
@@ -199,7 +205,7 @@ def train(cfg):
         val_loss, val_rmse = validate(model, val_loader, loss_fn, device, amp, stats, spec.target_channels)
         if val_loss < best_val:
             best_val, best_epoch, wait = val_loss, epoch, 0
-            torch.save({"model_state_dict": model.state_dict(), "epoch": epoch, "val_loss": val_loss,
+            torch.save({"model_state_dict": model_state(model), "epoch": epoch, "val_loss": val_loss,
                         "norm_stats": asdict(stats), "config": cfg, "run_id": run_dir.name,
                         "git_commit": meta["git_commit"], "config_hash": meta["config_hash"]},
                        run_dir / "best.pt")
