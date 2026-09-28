@@ -71,7 +71,6 @@ htmlcov/
 .env
 .env.local
 .venv
-uv.lock
 .vscode
 
 # OS
