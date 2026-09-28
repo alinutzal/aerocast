@@ -1,0 +1,16 @@
+# The legacy stacked ConvLSTM (two cells, recurrent over the hours), width scaled to the
+# parameter budget and with GroupNorm instead of BatchNorm (see models/convlstm.py).
+model:
+  name: convlstm
+  hidden_dims: [272, 136]
+  kernel_size: 3
+  norm: group
+  num_groups: 8
+  grad_checkpointing: true  # recompute each hour in backward: 15 steps at full width do not fit otherwise
+
+train:
+  amp: bf16
+
+tuning:                     # hidden [2h, h]; every option stays within 5M +/- 20%
+  knob: hidden_dims
+  options: [[256, 128], [272, 136], [288, 144]]

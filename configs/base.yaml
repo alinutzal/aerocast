@@ -52,11 +52,13 @@ split:
   val: ["2018-11-21", "2018-11-25"]
   test: ["2018-11-26", "2018-11-30"]
 
-model:                      # replaced by --model configs/models/<name>.yaml
+model:                      # replaced by --model configs/models/<name>.yaml; default = models/convlstm.yaml
   name: convlstm
-  hidden_dims: [64, 32]
+  hidden_dims: [272, 136]
   kernel_size: 3
-  grad_checkpointing: false
+  norm: group
+  num_groups: 8
+  grad_checkpointing: true
 
 train:
   batch_size: 4

@@ -16,3 +16,10 @@ features:
 
 split:
   mode: legacy
+
+model:                      # the Phase 1 ConvLSTM
+  name: convlstm
+  hidden_dims: [64, 32]
+  kernel_size: 3
+  norm: batch
+  grad_checkpointing: false
