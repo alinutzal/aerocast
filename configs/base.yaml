@@ -66,7 +66,9 @@ train:
   weight_decay: 1.0e-5
   grad_clip: 1.0
   scheduler: {T_0: 50, T_mult: 2, eta_min: 1.0e-6}  # CosineAnnealingWarmRestarts
-  loss: {type: mixed, huber_beta: 0.5, alpha: 0.7}  # alpha * Huber + (1 - alpha) * MSE
+  # Per channel: alpha * Huber + (1 - alpha) * MSE. multitask adds consistency_weight *
+  # mean((Ox - (NO2 + O3))^2) in physical units / training Ox variance.
+  loss: {type: mixed, huber_beta: 0.5, alpha: 0.7, consistency_weight: 1.0}
   log_every: 5
   amp: none                 # none | bf16 (autocast)
 

@@ -7,7 +7,7 @@ from aerocast.models.common import crop, pad_to_multiple, stack_time
 from aerocast.normalize import fit_stats, normalized_arrays
 from aerocast.data import WindowDataset
 from aerocast.splits import load_and_split
-from aerocast.train import build_loss
+from aerocast.targets import base_loss
 
 STATE = ("conc:NO", "conc:NO2", "conc:PM25_CL", "conc:O3")
 FORCING = ("meteo:TEMP2", "meteo:WSPD10", "meteo:U10", "meteo:V10", "emis:NO", "emis:NO2", "emis:HONO",
@@ -88,7 +88,7 @@ def test_gradients_reach_all_parameters(name):
 @pytest.mark.parametrize("name", MODELS)
 def test_overfits_one_tiny_batch(name, tiny_batch):
     model = make_model(name).train()
-    loss_fn = build_loss({"type": "mixed", "huber_beta": 0.5, "alpha": 0.7})
+    loss_fn = base_loss({"type": "mixed", "huber_beta": 0.5, "alpha": 0.7})
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
     losses = []
     for _ in range(200):

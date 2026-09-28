@@ -19,7 +19,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
@@ -28,7 +27,7 @@ from aerocast.data import WindowDataset
 from aerocast.models import build_model, count_parameters, model_spec
 from aerocast.normalize import fit_stats, normalized_arrays
 from aerocast.splits import load_and_split
-from aerocast.targets import physical_ox
+from aerocast.targets import TargetLoss, physical_ox
 
 # Files that runs append to; changes there do not make the code "dirty".
 OUTPUT_PATHS = ("results/", "EXPERIMENTS.md")
@@ -71,16 +70,6 @@ def autocast(device, amp):
     if amp == "bf16":
         return torch.autocast(device_type=device.type, dtype=torch.bfloat16)
     raise ValueError(f"Unknown train.amp {amp!r}; expected none or bf16")
-
-
-def build_loss(loss_cfg):
-    huber = nn.SmoothL1Loss(beta=loss_cfg["huber_beta"])
-    if loss_cfg["type"] == "huber":
-        return huber
-    if loss_cfg["type"] == "mixed":
-        mse, alpha = nn.MSELoss(), loss_cfg["alpha"]
-        return lambda pred, target: alpha * huber(pred, target) + (1 - alpha) * mse(pred, target)
-    raise ValueError(f"Unknown loss type {loss_cfg['type']!r}; expected huber or mixed")
 
 
 def window_datasets(hourly, stats, cfg, starts_by_name):
@@ -143,7 +132,7 @@ def train(cfg):
     model = build_model(cfg).to(device)
     optimizer = optim.Adam(model.parameters(), lr=train_cfg["lr"], weight_decay=train_cfg["weight_decay"])
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, **train_cfg["scheduler"])
-    loss_fn = build_loss(train_cfg["loss"])
+    loss_fn = TargetLoss(train_cfg["loss"], spec.target_channels, stats)
 
     run_dir = new_run_dir(cfg)
     meta = {
