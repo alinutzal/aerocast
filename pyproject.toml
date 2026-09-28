@@ -1,7 +1,7 @@
 [project]
 name = "aerocast"
 version = "0.1.0"
-description = "AeroCast data reading and analysis utilities"
+description = "ConvLSTM air-quality (Ox = NO2 + O3) forecasting on CMAQ grids"
 requires-python = ">=3.10"
 dependencies = [
   "xarray>=2024.3",
@@ -15,8 +15,24 @@ dependencies = [
   "seaborn>=0.12",
   "tqdm>=4.65",
   "wandb>=0.17",
+  "pyyaml>=6.0",
 ]
 
-[tool.uv]
-# Treat this repo as an application (not a package) to avoid building wheels
-package = false
+[project.scripts]
+aerocast-train = "aerocast.train:main"
+aerocast-evaluate = "aerocast.evaluate:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aerocast"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

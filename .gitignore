@@ -42,7 +42,7 @@ env/
 *.pth
 *.pt
 checkpoints/
-models/
+/models/
 
 # Data files (NetCDF, large datasets)
 *.nc
@@ -51,6 +51,7 @@ models/
 *.h5
 
 # Output/results
+cache/
 # *.png
 *.jpg
 *.pdf
