@@ -19,6 +19,7 @@ dependencies = [
   "neuraloperator==2.0.0",
   "monai==1.6.1",
   "einops==0.8.2",
+  "torch-geometric==2.8.0.post1",
 ]
 
 [project.scripts]

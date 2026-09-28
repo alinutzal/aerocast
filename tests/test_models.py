@@ -22,6 +22,7 @@ SMALL = {
     "fno": {"hidden_channels": 16, "n_modes": 8, "n_layers": 4},
     "swin": {"feature_size": 12, "depths": [2, 2, 2, 1], "window_size": 7, "mlp_ratio": 2.0},
     "swin_unet": {"embed_dim": 16, "depths": [2, 2, 2], "num_heads": [2, 4, 8], "window_size": 7},
+    "gnn": {"latent": 32, "processor_steps": 2},
 }
 MODELS = sorted(SMALL)
 
@@ -144,3 +145,34 @@ def test_checkpoint_round_trip_with_weights_only_loading(name, tmp_path):
     batch = random_batch()
     with torch.no_grad():
         torch.testing.assert_close(restored.eval()(batch), model.eval()(batch))
+
+
+def test_gnn_mesh_links_cells_4_and_16_apart():
+    import numpy as np
+    from aerocast.models.gnn import build_graph
+    g = build_graph(224, 164)
+    src, dst = g["mesh_edges"]
+    lengths = np.round(np.linalg.norm(g["mesh_pos"][dst] - g["mesh_pos"][src], axis=1), 3)
+    assert set(lengths) == {4.0, round(4 * 2 ** 0.5, 3), 16.0, round(16 * 2 ** 0.5, 3)}
+    assert 11 * 16 >= 100  # default processor steps x coarse spacing (km) covers 10 h of transport
+
+
+def test_gnn_edge_wind_is_the_along_edge_component():
+    model = make_model("gnn")
+    batch = random_batch(height=36, width=28)
+    u, v = model.wind
+    batch["forcing"][:, :, u], batch["forcing"][:, :, v] = 1.0, 0.0  # uniform wind toward +x (from the west)
+    graph = model.graph(36, 28, "cpu")
+    captured = {}
+    encoder = model.edge_encoders["mesh"]
+    handle = encoder.register_forward_hook(lambda module, inputs, output: captured.update(features=inputs[0]))
+    with torch.no_grad():
+        model(batch)
+    handle.remove()
+    geometry, unit = graph["geometry"]["mesh"]
+    along = captured["features"][0, :, 3:]
+    torch.testing.assert_close(along, unit[:, :1].expand_as(along))  # wind . unit vector = unit x-component
+    east = (unit[:, 0] == 1) & (unit[:, 1] == 0)
+    north = (unit[:, 0] == 0) & (unit[:, 1] == 1)
+    assert east.any() and north.any()
+    assert torch.all(along[east] == 1) and torch.all(along[north] == 0)

@@ -1,0 +1,17 @@
+# Encode-process-decode graph network (PyTorch Geometric): grid cells -> mesh of 4x4 blocks ->
+# multi-scale processor (mesh links 4 and 16 cells apart) -> grid cells. Edges carry their
+# offset, length and the along-edge wind for each of the 16 hours.
+model:
+  name: gnn
+  latent: 224
+  processor_steps: 11       # x 16 km coarse links: information can travel ~180 km
+  stride: 4
+  coarse_stride: 16
+  grad_checkpointing: false
+
+train:
+  amp: bf16
+
+tuning:                     # (latent, processor_steps); every option stays within 5M +/- 20%
+  knob: [latent, processor_steps]
+  options: [[256, 8], [224, 11], [192, 16]]
