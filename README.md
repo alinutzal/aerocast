@@ -1,210 +1,280 @@
 # AeroCast
 
-ConvLSTM forecasting of Ox (NO2 + O3) on the 1 km BAAQMD CMAQ grid (224 x 164): 6 hours of
-meteorology, chemical state and emissions in, 10 hourly Ox fields out.
+Deep-learning forecasts of Ox (NO2 + O3) on the 1 km BAAQMD CMAQ grid (224 x 164): 6 hours of
+chemical state plus meteorology and emissions for the input and forecast hours in, 10 hourly
+fields out.
 
-Phase 1 turns the original single script (kept unchanged in `legacy/grid_forcast.py`) into a small,
-tested pipeline with date-based train/val/test splits and two baselines (persistence and diurnal
-climatology) scored on the same windows as the model.
+- **Phase 1** turned the original script (kept unchanged in `legacy/grid_forcast.py`) into a tested
+  pipeline with date-based train/val/test splits and two baselines, persistence and diurnal
+  climatology.
+- **Phase 2** adds six more models to the ConvLSTM: U-Net, FNO, two Swin variants, a GNN and
+  Mamba. It also adds three target modes and a controlled benchmark in which only the model, the
+  target mode and the seed change between runs.
 
 ## Quick start
 
 ```bash
-uv sync                                   # installs aerocast (editable) + pytest
-uv run pytest                             # synthetic-data tests, ~15 s on CPU (see Testing)
+uv sync                                                # installs aerocast (editable) + pytest
+uv run pytest                                          # synthetic-data tests, ~2 min on CPU
 
-# Single-day smoke test on the real data (GPU recommended)
-uv run aerocast-train --config configs/smoke.yaml
+# One-day smoke test on the real data (GPU), any model from configs/models/
+uv run aerocast-train --config configs/smoke.yaml --model unet
+uv run aerocast-train --config configs/smoke.yaml --model fno --set target_mode=species
 
-# Re-score a saved run (appends to results/results.csv again)
+# Re-score a saved run
 uv run aerocast-evaluate runs/<run_id>
+
+# Controlled benchmark (needs several days of data and split.mode: dates)
+uv run python scripts/run_benchmark.py --model unet    # resumable, one model at a time
+uv run python scripts/make_tables.py
+uv run python scripts/profile_models.py                # GPU cost of every model
 ```
 
 Run commands from the repo root: data, cache and output paths in the configs are relative to it.
-Any config value can be overridden on the command line, e.g.
-`--set train.epochs=2 --set features.future_forcings=true`. `aerocast-train` evaluates the best
-checkpoint when training finishes; pass `--no-eval` to skip that step.
+Any config value can be overridden on the command line (`--set train.epochs=2`), and `--note`
+adds a note to the run's line in `EXPERIMENTS.md`. `aerocast-train` evaluates the best checkpoint
+when training finishes; pass `--no-eval` to skip that step.
 
-On OSC, get a GPU first, e.g. `salloc -C gpu -t 2:00:00 -c 4 -A <project> --gpus=1`.
+On OSC, get a GPU first: `salloc -C gpu -t 2:00:00 -c 4 -A <project> --gpus=1`.
 
 ## Layout
 
 ```
 configs/
-  base.yaml          data paths, variables, seq/pred lengths, split dates, seed, training
-  smoke.yaml         single-day smoke test (inherits base.yaml)
-  legacy.yaml        refactor check against the legacy script
+  base.yaml              data, inputs, target mode, splits, seed, training, evaluation, outputs
+  smoke.yaml             single-day smoke test (inherits base.yaml)
+  legacy.yaml            Phase 1 inputs and ConvLSTM, for the refactor check
+  models/<name>.yaml     one per model: architecture, AMP, checkpointing, tuning knob
+  experiments/benchmark.yaml   models x target modes x seeds, budget, search space
 src/aerocast/
-  config.py          YAML loading with `base:` inheritance, --set overrides, config hash
-  data.py            load days by date, align hours, cache arrays, build windows
-  splits.py          contiguous date-block splits; smoke_test and legacy modes
-  normalize.py       stats from training windows only, saved as JSON
-  baselines.py       persistence and diurnal climatology
-  metrics.py         RMSE, MAE, mean bias, Pearson r per lead hour and overall
-  models/convlstm.py StackedConvLSTM, moved unchanged from the legacy script
-  train.py           aerocast-train
-  evaluate.py        aerocast-evaluate
+  config.py              YAML with `base:` inheritance, --model, --set overrides, config hash
+  data.py                load days, align hours, derived channels, cache, windows
+  splits.py              contiguous date-block splits; smoke_test and legacy modes
+  normalize.py           stats from training windows only, saved as JSON
+  targets.py             target modes: output channels, loss, native-unit conversion
+  baselines.py           persistence and diurnal climatology
+  metrics.py             per-day sums, metrics, high-Ox skill, spectra, block bootstrap
+  models/                registry, shared helpers and one file per model
+  train.py, evaluate.py  aerocast-train, aerocast-evaluate
 scripts/
-  make_synthetic_data.py   CMAQ-like NetCDF days on a small grid (used by the tests)
-tests/               pytest suite (synthetic data only)
-legacy/
-  grid_forcast.py    original script, unchanged
-src/read_data.py     original exploratory loader (unchanged)
-datasets/            NetCDF inputs (gitignored)
-cache/               preprocessed per-day arrays (gitignored)
-runs/                one directory per training run (gitignored)
-results/results.csv  appended by every evaluation
+  make_synthetic_data.py CMAQ-like NetCDF days on a small grid (used by the tests)
+  run_benchmark.py       tuning trials, selection, final runs (resumable)
+  make_tables.py         Markdown/LaTeX tables and CSV figure data from results.csv
+  profile_models.py      parameters, memory, training and inference time per model
+tests/                   pytest suite (synthetic data; two tests need a CUDA GPU)
+legacy/grid_forcast.py   original script, unchanged
+EXPERIMENTS.md           one line per run, written by aerocast-evaluate
+results/results.csv      appended by every evaluation
+results/profile.csv      model cost on one GPU (CMAQ wall-clock column filled by hand)
+datasets/, cache/, runs/ inputs, preprocessed arrays, run directories (gitignored)
 ```
 
-## Data
+## Data and inputs
 
-Each day needs three files in `data.data_dir`, named by date (`{date}` = `YYYYMMDD`; patterns in
-`data.files`, globs allowed):
+Each day needs three files in `data.data_dir` (`{date}` = `YYYYMMDD`; patterns in `data.files`):
+`METCRO2D_{date}.nc`, `out.combine_{date}.nc` and `egts_l.{date}.*.ncf`, with dims
+`(TSTEP, LAY, ROW, COL)` (the surface layer is used).
 
-| File | Variables used | Units |
+Channels are named `source:VAR`, so the emission and concentration NO/NO2 stay distinct:
+
+| Group | Channels | Hours |
 |---|---|---|
-| `METCRO2D_{date}.nc` | TEMP2, WSPD10, WDIR10 | K, m/s, degrees |
-| `out.combine_{date}.nc` | NO, NO2, PM25_CL (inputs); NO2 + O3 (target) | ppbV, ug m-3 |
-| `egts_l.{date}.*.ncf` | ALK1, OLE1, ARO1, ARO2, TERP, ISOP | moles/s |
+| state | `conc:NO`, `conc:NO2`, `conc:PM25_CL`, `conc:O3` (the last via `features.include_o3_input`) | t−6 … t−1 |
+| forcing | `meteo:TEMP2`, `meteo:WSPD10`, `meteo:U10`, `meteo:V10`; `emis:NO`, `emis:NO2`, `emis:HONO`, `emis:ALK1`, `OLE1`, `ARO1`, `ARO2`, `TERP`, `ISOP`; `time:HOUR_SIN`, `time:HOUR_COS` | t−6 … t+9 (`features.future_forcings`) |
+| static | `grid:X`, `grid:Y` (grid coordinates scaled to [0, 1]) | – |
 
-All variables have dims `(TSTEP, LAY, ROW, COL)`; the surface layer is used. The target
-Ox = NO2 + O3 is reported in the concentration file's units (ppbV), and each run records that
-unit in `run.json`.
+- **Wind:** `meteo:U10` and `meteo:V10` are derived from WSPD10 and WDIR10 (meteorological
+  convention). They are treated as grid-relative; the projection's rotation from true north is
+  under 2° on this domain.
+- **Hour of day:** in local standard time (`data.local_utc_offset_hours: -8`).
+- **Targets:** NO2 and O3 from out.combine; Ox = NO2 + O3, in native units (ppbV), recorded per
+  run.
+- **Without `future_forcings`:** the forecast hours repeat hour t−1, so no future values are seen.
 
-**Time alignment.** Hours are matched on each file's TFLAG plus `data.time_offset_hours`, and only
-hours present in all three files are kept. METCRO2D and the emission files are stamped 08Z to 08Z
-the next day, which is 00 to 24 local standard time (PST = UTC-8); their solar radiation and
-rush-hour emissions confirm those stamps. The out.combine files are stamped 00Z to 23Z, but their
-diurnal cycles (O3 peaking at step 13, NO at step 9) show they hold 00 to 23 PST, so `conc` gets
-+8 h. With that offset each day contributes 24 aligned hours, identical to the index alignment the
-legacy script used. Without it only 16 hours overlap per day, and the loader warns about it. If a
-future batch of files is stamped differently, adjust the offsets.
+**Normalization** (`data.normalization`: none | predictors | full) is fitted on training windows
+only, using the legacy formula: hours are weighted by how many training windows contain them, and
+the std is unbiased plus 1e-6. Val/test use the saved stats unchanged.
+- **State and forcing:** per-channel mean and std, over the hours each is fed for.
+- **Wind:** u and v share one scale with no mean shift, so wind direction survives.
+- **Time and grid channels:** left as they are.
+- **Targets:** a scalar mean and std per target (NO2, O3, Ox).
 
-**More days.** Drop the new files into `datasets/` and set the split date blocks in
-`configs/base.yaml` (or a copy of it). Days are concatenated hourly, and windows never bridge a
-missing day. The first read of each day is cached under `cache/`, keyed on the file names, sizes,
-mtimes, variables and offsets.
+**Time alignment.** Hours are matched on each file's TFLAG plus `data.time_offset_hours`, keeping
+only hours present in all three files.
+- **METCRO2D and emissions:** stamped 08Z–08Z, which is 00–24 local standard time (PST = UTC−8).
+- **out.combine:** stamped 00Z–23Z, but its O3/NO diurnal cycles show it holds 00–23 PST, so
+  `conc` gets +8 h.
+
+Each day then contributes 24 aligned hours. Without the offset only 16 hours overlap, and the
+loader warns. If a future batch of files is stamped differently, adjust the offsets.
+
+**More days.** Drop the files into `datasets/` and set the split date blocks. Days are
+concatenated hourly, windows never bridge a missing day, and each day is read from NetCDF once
+(cached under `cache/`).
 
 ## Splits
 
 `split.mode` in the config:
 
 - **`dates`** (default): `split.train`, `split.val` and `split.test` are contiguous, inclusive date
-  blocks (`[start, end]` or a list of them) that must not overlap. Every hour takes the split of
-  its file date. A window (6 input + 10 target hours) is kept only if all 16 hours are consecutive
-  and in the same split; windows that cross a split boundary or a gap are dropped. The run fails if
-  any split ends up with no windows.
+  blocks that must not overlap. A window (6 input + 10 target hours) is kept only if all 16 hours
+  are consecutive and in the same split. Windows crossing a split boundary or a gap are dropped.
 - **`smoke_test`**: for a single day, where no clean held-out split exists. Training, early
-  stopping and evaluation all use every window; the run prints a warning, and its rows are
-  labelled `smoke_test`, never `test`. Climatology is fitted on the same day it is scored on, so
-  it is trivially perfect in this mode.
-- **`legacy`**: same windows as `smoke_test`, rows labelled `legacy`. Only for the refactor check
-  below.
+  stopping and evaluation use every window, with a warning. Rows are labelled `smoke_test`, never
+  `test`. Climatology is fitted on the day it is scored on, so it is trivially perfect here.
+- **`legacy`**: same windows as `smoke_test`, rows labelled `legacy`, for the refactor check.
 
-Only `dates` mode can produce rows labelled `test`.
+Only `dates` mode produces `test` rows, and only `test` rows feed benchmark tables.
+
+## Models
+
+Every model maps a batch `{state (B, 6, 4, H, W), forcing (B, 16, 15, H, W), static (B, 2, H, W)}`
+to `(B, 10, K, H, W)`. They are built from the registry (`build_model(cfg)`) and never assume H or W.
+The 2D models stack all hours into channels (266 inputs), pad to what they need and crop back.
+
+| Name | Model | Params | Notes |
+|---|---|---|---|
+| `convlstm` | stacked ConvLSTM, hidden [272, 136] | 4.87M | recurrent; GroupNorm; per-hour recomputation in backward |
+| `unet` | plain 4-level 2D U-Net, widths 52–416 | 4.87M | GroupNorm, bilinear upsampling |
+| `fno` | neuraloperator FNO, 4 layers, hidden 64, 16x16 modes | 4.80M | 12.5% domain padding; fp32; any grid size |
+| `swin` | MONAI SwinUNETR (2D), feature 24 | 5.70M | ~70% of parameters in its conv decoder |
+| `swin_unet` | Swin U-Net, transformer stages on both sides | 4.82M | built from MONAI's Swin stages |
+| `gnn` | encode-process-decode GNN (PyTorch Geometric) | 4.97M | mesh links 4 and 16 cells apart; along-edge wind per hour |
+| `mamba` | VMamba-style 2D selective scan, patch 4, 4 directions | 4.94M | backend `mamba_ssm` (CUDA) or `mambapy` |
+
+- **Parameter budget:** all within 5M ±20%; complex FNO weights count as two parameters.
+- **Tuning knob:** each `configs/models/<name>.yaml` has one width/depth knob with three options,
+  all within budget (checked by `tests/test_budget.py`).
+- **AMP and checkpointing:** bf16 autocast everywhere except the FNO, whose FFTs need fp32.
+  Gradient checkpointing is on for the ConvLSTM only. Both settings are logged in `run.json`.
+- **ConvLSTM normalization:** the legacy ConvLSTM used BatchNorm. Its BatchNorm right before the
+  output conv fixed each lead's batch-mean output in train mode, so it could not fit the diurnal
+  change across lead hours. The Phase 2 ConvLSTM uses GroupNorm; `legacy.yaml` keeps BatchNorm.
+- **Mamba install:** `mamba-ssm` is pinned to its prebuilt wheel (Linux, CUDA 12, torch 2.9,
+  Python 3.12). It is installed without the language-model dependencies it declares; aerocast
+  calls only its compiled scan kernel. Elsewhere `mambapy` runs the same scan in PyTorch. The
+  backend is recorded per run, and the benchmark uses `mamba_ssm` throughout.
+
+### Target modes (`target_mode`)
+
+- `ox`: one channel, Ox directly.
+- `species`: NO2 and O3. Ox = NO2 + O3 is formed after denormalizing.
+- `multitask`: NO2, O3 and Ox. The loss is L(NO2) + L(O3) + L(Ox) + λ · mean((Ox − (NO2 + O3))²).
+  The last term uses physical units divided by the training Ox variance
+  (`train.loss.consistency_weight` = λ = 1). Ox is scored from the Ox head, and the species sum is
+  reported as `oxsum_*`.
 
 ## Training
 
-- Fixed seed (`seed`), deterministic cuDNN, seeded shuffling.
-- Normalization (`data.normalization`: none | predictors | full) is fitted on training windows
-  only: per-channel input mean/std and a scalar target mean/std, using the legacy formula (hours
-  weighted by how many training windows contain them, unbiased std + 1e-6). Val/test use the
-  saved stats unchanged.
-- Early stopping (`train.patience`) and the saved checkpoint both use the validation loss.
-- Optimizer, scheduler, loss and clipping match the legacy script: Adam (1e-3, wd 1e-5),
-  CosineAnnealingWarmRestarts (T_0 50, T_mult 2), 0.7 Huber(beta 0.5) + 0.3 MSE, grad-norm clip 1.0,
-  batch 4, up to 500 epochs, patience 30.
+- **Reproducibility:** fixed seed, deterministic cuDNN, seeded shuffling.
+- **Early stopping:** early stopping and the saved checkpoint both use the validation loss.
+- **Optimization:** Adam, CosineAnnealingWarmRestarts (T_0 50, T_mult 2), and per-channel
+  0.7·Huber(β 0.5) + 0.3·MSE with grad-norm clip 1.0 and batch 4.
+- **Budget:** the benchmark allows 150 epochs with patience 20; the smoke and base configs keep
+  the legacy 500 and 30.
 
-Each run writes `runs/<run_id>/`: `config.yaml` (resolved, including the days used), `run.json`
-(git commit, config hash, windows per split, channels, target unit, best epoch),
-`norm_stats.json`, `best.pt` (weights plus stats and config), `history.csv`, and after evaluation
-`per_window_rmse.csv` and `summary.txt`.
-
-### Feature flags
-
-Both flags are off by default, which reproduces the legacy inputs:
-
-- `features.include_o3_input`: adds O3 to the past-state channels (NO, NO2, PM25_CL, O3).
-- `features.future_forcings`: during the 10-step rollout, the frame fed before predicting hour
-  t+k+1 carries the meteorology and emissions of hour t+k, with the state channels held at the last
-  input hour. With the flag off, the last input frame is repeated, as in the legacy script.
+Each run writes `runs/<run_id>/` containing:
+- `config.yaml` (resolved, including the days used);
+- `run.json` (git commit, config hash, model, parameters, AMP, checkpointing, Mamba backend, GPU,
+  peak memory, seconds per epoch, windows, target unit);
+- `norm_stats.json`, `best.pt` (tensors only) and `history.csv`;
+- the evaluation files below.
 
 ## Evaluation
 
-`aerocast-evaluate runs/<run_id>` (also run automatically by `aerocast-train`) scores three models
-on exactly the same windows, in native units:
+`aerocast-evaluate` scores the model, persistence (hour t−1 held) and climatology (per-cell,
+per-hour-of-day mean over training days) on exactly the same windows, in native units:
 
-- `convlstm`: the best checkpoint, denormalized.
-- `persistence`: Ox at the last input hour (t-1), held for all 10 lead hours.
-- `climatology`: per-cell mean Ox for each hour of day, from training days only.
+- **Core metrics:** RMSE, MAE, mean bias and Pearson r, per lead hour and overall.
+- **Other variables:** NO2 and O3 metrics (`no2_*`, `o3_*`) in species and multitask modes, for
+  the baselines too.
+- **High-Ox skill:** the threshold is the 95th percentile of Ox on training days. Reported as CSI
+  and F1 for exceedance, and RMSE on cells above the threshold (`csi_p95`, `f1_p95`,
+  `rmse_above_p95`).
+- **Smoothing check:** radially averaged power spectra (mean removed, Hann taper) at leads 1, 5
+  and 10. `spectral_ratio` is predicted/true power over the top third of wavenumbers: below 1 is
+  too smooth, above 1 is noisy or blocky.
+- **Confidence intervals:** 95% CIs by block bootstrap over days (`*_ci95_lo/hi`, needs ≥ 2
+  days).
+- **Test rows** are written once per config hash; `--rewrite-test` overrides this.
 
-The metrics are RMSE, MAE, mean bias (forecast - truth) and Pearson r, per lead hour (1 to 10)
-and overall (`lead_hour = all`). Rows are appended to `results/results.csv`:
+Rows go to `results/results.csv` (`run_id, model, split, lead_hour, metric, value, config_hash,
+git_commit`), and a line goes to `EXPERIMENTS.md`. The run directory also gets:
+- `per_window_rmse.csv`;
+- `daily_stats.csv` (per-day sums, for paired comparisons);
+- `spectra.csv`;
+- `error_maps_<split>.npz` (the highest-Ox window);
+- `summary.txt`.
 
-```
-run_id, model, split, lead_hour, metric, value, config_hash, git_commit
-```
+`git_commit` ends in `-dirty` when tracked files other than the run logs had uncommitted changes.
 
-`split` is `val`/`test` in `dates` mode, otherwise `smoke_test` or `legacy`. `config_hash`
-identifies the experiment settings (it ignores the run name, output paths and logging).
-`git_commit` gets a `-dirty` suffix when tracked files had uncommitted changes.
+## Benchmark
+
+`configs/experiments/benchmark.yaml` fixes everything except the model, its tuned settings, the
+target mode and the seed.
+
+1. **Tune:** 8 random-search trials per model in `ox` mode, writing validation rows only. The
+   learning rate (1e-4 to 3e-3) and weight decay (1e-6 to 1e-3) are drawn log-uniform, and trial
+   *i* uses the same draw for every model. The model's knob is drawn from its three options.
+2. **Select:** the trial with the lowest validation Ox RMSE, written to
+   `results/benchmark_selection.json`.
+3. **Final:** the selected config × 3 target modes × 3 seeds, validation and test.
+
+`scripts/run_benchmark.py` is resumable: runs whose config hash already has its rows are skipped.
+`--model NAME` runs one model and `--dry-run` lists what would run. It checks the parameter
+budget before every run and refuses anything but a `dates` split.
+
+`scripts/make_tables.py` builds everything from test rows only; smoke-test rows are refused. It
+writes `results/benchmark/`:
+- `main.md`/`main.tex`: persistence and climatology first, then model × target mode, with:
+  - Ox RMSE, MAE, MB and r, each with a 95% CI (block bootstrap over test days, seed-averaged);
+  - CSI (p95) and spectral ratio at leads 1/5/10;
+  - parameters and inference time;
+  - the paired RMSE difference vs the U-Net of the same target mode, with its CI.
+- `lead_rmse.md`/`.tex`: Ox RMSE by lead hour.
+- `figures/`: CSV data for Prism (lead-time curves with CIs, spectra, truth/forecast/error maps
+  of the highest-Ox test window) and quick PNG previews.
+
+`scripts/profile_models.py` measures each model on one GPU and writes `results/profile.csv`:
+parameters, peak training memory, time per training step and epoch, and inference time for one
+10-hour forecast on the full grid (batch 1, 50 runs after warm-up). Fill in the CMAQ wall-clock
+column by hand; reruns keep it.
 
 ## Testing
 
-There are three levels, fastest first. Run them from the repo root.
-
-**1. Unit tests** (CPU, about 15 s; fine on a login node):
-
 ```bash
-uv run pytest                 # expect "19 passed"
-uv run pytest -v -k splits    # one group: splits, normalize, baselines or pipeline
+uv run pytest                     # 114 tests on CPU (~2 min); 2 more run only on a CUDA GPU
+uv run pytest -k "models and unet"
 ```
 
-The tests write three synthetic days with `scripts/make_synthetic_data.py` and check that:
-
-- no window crosses a split boundary or a missing day, and the conc time offset aligns the files
-- normalization stats don't change when val/test values change, and match the legacy formula
-- persistence equals the t−1 field at every lead hour
-- climatology uses training days only
-- both feature flags train and evaluate, and future frames carry the forecast hour's forcings
-- a fixed seed repeats training exactly
-- a 2-epoch train + evaluate run writes `results.csv`, and concurrent appends keep one header
-
-**2. End to end with a train/val/test split, on synthetic data** (CPU, under a minute). Until
-more days of real data arrive, this is the only way to run `dates` mode:
-
-```bash
-uv run python scripts/make_synthetic_data.py --out-dir /tmp/aerocast-synth --days 3
-uv run aerocast-train --config configs/base.yaml \
-  --set data.data_dir=/tmp/aerocast-synth --set data.cache_dir=/tmp/aerocast-synth/cache \
-  --set 'split.train=["2018-11-13","2018-11-13"]' \
-  --set 'split.val=["2018-11-14","2018-11-14"]' \
-  --set 'split.test=["2018-11-15","2018-11-15"]' \
-  --set train.epochs=2 \
-  --set output.runs_dir=/tmp/aerocast-synth/runs --set output.results_csv=/tmp/aerocast-synth/results.csv
-```
-
-Expect separate `val` and `test` tables, with non-zero climatology. The ConvLSTM scores poorly
-after two epochs; this run only checks that everything connects.
-
-**3. Real data** (GPU):
-
-```bash
-salloc -C gpu -t 1:00:00 -c 4 -A <project> --gpus=1
-uv run aerocast-train --config configs/smoke.yaml    # about 40 s on an A100
-```
-
-On an A100 with seed 42 this gave ConvLSTM RMSE 3.63, persistence 5.97 and climatology 0.00 ppbV
-(in-sample; see [What the single-day numbers mean](#what-the-single-day-numbers-mean)). The table
-is also saved to `runs/<run_id>/summary.txt`. To try the feature flags, add
-`--set features.include_o3_input=true --set features.future_forcings=true`. To compare against
-the legacy script, see the next section.
+The tests run on synthetic days from `scripts/make_synthetic_data.py`, which uses the real files'
+variables, dims, units and time stamps. They cover:
+- **Data:** split boundaries, time alignment, the derived channels, and train-only
+  normalization.
+- **Baselines and targets:** persistence, train-only climatology, the three target modes (species
+  sums in physical units, the multitask consistency term), and every metric against a direct
+  computation.
+- **Every model:**
+  - output shape on 16x12 and 36x28 grids;
+  - gradients reaching all parameters;
+  - overfitting one tiny batch (loss down > 90% in 200 steps);
+  - weights-only checkpoint round trips;
+  - the parameter budget.
+- **Model-specific:**
+  - FNO at 2x the training resolution;
+  - the GNN mesh and edge winds;
+  - ConvLSTM causality.
+- **GPU only:** the Mamba kernel wrapper against the PyTorch scan.
+- **Workflow:** an end-to-end benchmark (tune → select → final → resume) and the tables built from
+  it.
 
 ## Refactor check
 
-`configs/legacy.yaml` trains and scores on every window of 2018-11-13 with both flags off, and
-should give per-window RMSE close to the legacy script's. To rerun the old script without
-overwriting the committed PNGs in `results/`, run it from a scratch directory:
+`configs/legacy.yaml` runs the Phase 1 inputs and ConvLSTM (BatchNorm, flags off) on every window of
+2018-11-13. In Phase 1 the pipeline in this mode gave per-window RMSE of 3.60 ppbV on average over
+windows 0–7, against 3.56 for a fresh run of `legacy/grid_forcast.py`, with no window differing by
+more than 0.23. The legacy script's own run-to-run spread is about 1 ppbV. To rerun the old script
+without touching the committed `results/*.png`:
 
 ```bash
 mkdir -p runs/legacy_script && ln -s ../../datasets runs/legacy_script/datasets
@@ -212,49 +282,11 @@ mkdir -p runs/legacy_script && ln -s ../../datasets runs/legacy_script/datasets
 uv run aerocast-train --config configs/legacy.yaml
 ```
 
-Known differences from the legacy script:
-- The legacy `range(seq_len, T - pred_len)` skips the last valid window, so it has 8 windows per
-  day where the pipeline has 9. Windows 0 to 7 are the same.
-- The legacy script stops early on training loss and evaluates the final weights; the pipeline
-  selects the best checkpoint on validation loss.
-- The legacy script is unseeded.
-
-Result on 2018-11-13 (A100, 2026-09-28). Per-window RMSE is in ppbV and in-sample:
-
-| Window (first target hour) | Legacy script | Pipeline, `legacy` mode | Persistence |
-|---|---|---|---|
-| 0 (06 PST) | 4.28 | 4.35 | 6.01 |
-| 1 (07 PST) | 4.11 | 3.99 | 6.71 |
-| 2 (08 PST) | 3.83 | 3.70 | 7.34 |
-| 3 (09 PST) | 3.47 | 3.50 | 7.34 |
-| 4 (10 PST) | 3.14 | 3.30 | 6.67 |
-| 5 (11 PST) | 2.99 | 3.22 | 5.30 |
-| 6 (12 PST) | 3.16 | 3.31 | 3.94 |
-| 7 (13 PST) | 3.53 | 3.47 | 4.07 |
-| 8 (14 PST) | – | 3.67 | 5.26 |
-| Mean of 0–7 | 3.56 | 3.60 | 5.92 |
-
-Earlier runs of the unseeded legacy script averaged 4.25 (the numbers previously in this README)
-and 4.69 (W&B, 2026-04-06). The run-to-run spread is larger than the old-vs-new difference.
-
-## Model
-
-`StackedConvLSTM`: two ConvLSTM cells (12 → 64 → 32 channels, 3x3 kernels, BatchNorm on the gates
-and on each hidden state), then a 1x1 convolution to one channel. It encodes the 6 input hours, then
-rolls out autoregressively in hidden-state space for 10 steps.
-
-```
-Input  (B, 6, C, 224, 164)   C = 12 (13 with include_o3_input)
-Output (B, 10, 224, 164)     Ox in normalized units, denormalized for evaluation
-```
-
 ## What the single-day numbers mean
 
-The legacy script trained on the same 8 windows of one day that it reported on, and computed its
-normalization over all of them, so its 3.7 to 4.8 ppbV RMSE is in-sample. The smoke test is
-in-sample too. Even so, persistence beats the ConvLSTM at +1 h (1.97 vs 4.38) and +2 h (3.56 vs
-4.30); the ConvLSTM only wins from +3 h on. None of these numbers are a held-out result. That
-needs the `dates` split, which needs more days.
+With one day of data every run is a `smoke_test`: trained and scored on the same windows. The
+smoke numbers in `EXPERIMENTS.md` show that each model runs end to end; they are not a comparison
+between models. Held-out results need the `dates` split, which needs more days.
 
 ## License
 
