@@ -1,7 +1,8 @@
 """Score a trained run and the baselines on identical windows, in the target's native units.
 
 Appends rows (run_id, model, split, lead_hour, metric, value, config_hash, git_commit) to
-results.csv, and writes per_window_rmse.csv and summary.txt into the run directory.
+results.csv, writes per_window_rmse.csv and summary.txt into the run directory, and records
+the run in EXPERIMENTS.md.
 """
 import argparse
 import csv
@@ -17,15 +18,17 @@ from torch.utils.data import DataLoader
 from aerocast.baselines import DiurnalClimatology, persistence
 from aerocast.config import load_config
 from aerocast.metrics import LeadMetrics
-from aerocast.models import build_model
+from aerocast.models import build_model, model_spec
 from aerocast.normalize import NormStats
 from aerocast.splits import load_and_split
+from aerocast.targets import physical_ox
 from aerocast.train import predict_batch, window_datasets, write_json
 
 RESULT_COLUMNS = ["run_id", "model", "split", "lead_hour", "metric", "value", "config_hash", "git_commit"]
-MODELS = ("convlstm", "persistence", "climatology")
+BASELINES = ("persistence", "climatology")
 NOTES = {"smoke_test": "IN-SAMPLE smoke test, not a held-out result",
          "legacy": "in-sample, refactor check only"}
+EXPERIMENT_HEADER = ["date", "run id", "model", "target mode", "seed", "config hash", "val Ox RMSE", "test Ox RMSE", "note"]
 
 
 def append_results(path, rows):
@@ -44,7 +47,37 @@ def append_results(path, rows):
         writer.writerows(rows)
 
 
-def format_summary(rows, unit, n_windows, pred_len):
+def log_experiment(path, meta, rows):
+    """Add or replace this run's line in the EXPERIMENTS.md table."""
+    def ox_rmse(split):
+        return next((float(r["value"]) for r in rows if r["model"] == meta["model"] and r["split"] == split
+                     and r["lead_hour"] == "all" and r["metric"] == "rmse"), None)
+
+    notes = [f"{label} Ox RMSE {ox_rmse(label):.3f} (in-sample)" for label in NOTES if ox_rmse(label) is not None]
+    if meta.get("note"):
+        notes.append(meta["note"])
+    cells = [meta["created"][:10], meta["run_id"], meta["model"], meta.get("target_mode", "ox"), str(meta["seed"]),
+             meta["config_hash"], *(f"{v:.3f}" if v is not None else "–" for v in (ox_rmse("val"), ox_rmse("test"))),
+             "; ".join(notes)]
+    line = "| " + " | ".join(cells) + " |"
+    path = Path(path)
+    with open(path, "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        lines = f.read().splitlines()
+        if not lines:
+            lines = ["# Experiments", "", "One line per run, written by aerocast-evaluate.", "",
+                     "| " + " | ".join(EXPERIMENT_HEADER) + " |", "|" + "---|" * len(EXPERIMENT_HEADER)]
+        marker = f"| {meta['run_id']} |"
+        lines = [line if marker in existing else existing for existing in lines]
+        if line not in lines:
+            lines.append(line)
+        f.seek(0)
+        f.truncate()
+        f.write("\n".join(lines) + "\n")
+
+
+def format_summary(rows, unit, n_windows, pred_len, models):
     def value(sub, model, lead, metric):
         return next(float(r["value"]) for r in sub if r["model"] == model and r["lead_hour"] == lead and r["metric"] == metric)
 
@@ -55,9 +88,9 @@ def format_summary(rows, unit, n_windows, pred_len):
         lines += ["", f"== {label}: {n_windows[label]} windows, Ox in {unit}{note}",
                   f"{'model':<12} {'RMSE':>7} {'MAE':>7} {'bias':>7} {'r':>6}"]
         lines += [f"{m:<12} {value(sub, m, 'all', 'rmse'):7.3f} {value(sub, m, 'all', 'mae'):7.3f} "
-                  f"{value(sub, m, 'all', 'bias'):7.3f} {value(sub, m, 'all', 'pearson_r'):6.3f}" for m in MODELS]
+                  f"{value(sub, m, 'all', 'bias'):7.3f} {value(sub, m, 'all', 'pearson_r'):6.3f}" for m in models]
         lines += ["RMSE by lead hour", f"{'model':<12} " + " ".join(f"{f'+{k}h':>6}" for k in range(1, pred_len + 1))]
-        lines += [f"{m:<12} " + " ".join(f"{value(sub, m, k, 'rmse'):6.2f}" for k in range(1, pred_len + 1)) for m in MODELS]
+        lines += [f"{m:<12} " + " ".join(f"{value(sub, m, k, 'rmse'):6.2f}" for k in range(1, pred_len + 1)) for m in models]
     return "\n".join(lines)
 
 
@@ -67,33 +100,37 @@ def evaluate_run(run_dir, results_csv=None):
     cfg = load_config(run_dir / "config.yaml")
     meta = json.loads((run_dir / "run.json").read_text())
     stats = NormStats.load(run_dir / "norm_stats.json")
-    pred_len = cfg["data"]["pred_len"]
+    spec = model_spec(cfg)
+    pred_len = spec.t_out
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    amp = cfg["train"].get("amp", "none")
 
     hourly, splits = load_and_split(cfg)
     if stats.channels != hourly.channels:
         raise ValueError(f"Run was trained on channels {stats.channels}, data has {hourly.channels}")
-    model = build_model(cfg["model"], len(hourly.channels)).to(device)
+    model = build_model(cfg).to(device)
     model.load_state_dict(torch.load(run_dir / "best.pt", map_location=device)["model_state_dict"])
     model.eval()
-    climatology = DiurnalClimatology(hourly.y, hourly.times, splits.train_hours)
+    ox = hourly.targets["Ox"]
+    climatology = DiurnalClimatology(ox, hourly.times, splits.train_hours)
     datasets = window_datasets(hourly, stats, cfg, splits.evaluate)
+    models = (cfg["model"]["name"], *BASELINES)
 
     rows, per_window = [], []
     for label, starts in splits.evaluate.items():
         if label == "test" and splits.mode != "dates":
             raise RuntimeError("Only a date-block split may produce test rows")
-        metrics = {name: LeadMetrics(pred_len) for name in MODELS}
+        metrics = {name: LeadMetrics(pred_len) for name in models}
         loader = DataLoader(datasets[label], batch_size=cfg["train"]["batch_size"])
         i = 0
         with torch.no_grad():
             for batch in loader:
-                pred, _ = predict_batch(model, batch, device, pred_len)
-                for model_pred in stats.denormalize_y(pred.cpu().numpy()):
+                pred, _ = predict_batch(model, batch, device, amp)
+                for model_ox in physical_ox(pred, stats, spec.target_channels).cpu().numpy():
                     t = int(starts[i])
-                    obs = hourly.y[t:t + pred_len]
-                    forecasts = {"convlstm": model_pred,
-                                 "persistence": persistence(hourly.y, t, pred_len),
+                    obs = ox[t:t + pred_len]
+                    forecasts = {models[0]: model_ox,
+                                 "persistence": persistence(ox, t, pred_len),
                                  "climatology": climatology.predict(hourly.times[t:t + pred_len])}
                     for name, forecast in forecasts.items():
                         metrics[name].update(forecast[None], obs[None])
@@ -101,7 +138,7 @@ def evaluate_run(run_dir, results_csv=None):
                         per_window.append({"split": label, "window": i, "first_target_hour_utc": str(hourly.times[t]),
                                            "model": name, "rmse": f"{rmse:.6g}"})
                     i += 1
-        for name in MODELS:
+        for name in models:
             rows += [{"run_id": meta["run_id"], "model": name, "split": label, "lead_hour": lead, "metric": metric,
                       "value": f"{value:.6g}", "config_hash": meta["config_hash"], "git_commit": meta["git_commit"]}
                      for lead, metric, value in metrics[name].results()]
@@ -112,12 +149,13 @@ def evaluate_run(run_dir, results_csv=None):
         writer = csv.DictWriter(f, fieldnames=list(per_window[0]))
         writer.writeheader()
         writer.writerows(per_window)
-    summary = format_summary(rows, hourly.target_unit, {k: len(v) for k, v in splits.evaluate.items()}, pred_len)
+    summary = format_summary(rows, hourly.target_unit, {k: len(v) for k, v in splits.evaluate.items()}, pred_len, models)
     (run_dir / "summary.txt").write_text(summary.lstrip() + "\n")
     meta["evaluation"] = {"evaluated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                           "labels": list(splits.evaluate), "target_unit": hourly.target_unit,
                           "results_csv": str(results_csv)}
     write_json(run_dir / "run.json", meta)
+    log_experiment(cfg["output"]["experiments_md"], meta, rows)
     print(summary)
     print(f"\nAppended {len(rows)} rows to {results_csv}")
     return rows

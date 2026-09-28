@@ -1,9 +1,18 @@
-# Refactor check only: train and evaluate on every window of the original day, as
-# legacy/grid_forcast.py does, with both feature flags off. Rows are labelled legacy.
+# Refactor check only: train and evaluate on every window of the original day with the
+# legacy inputs, flags off and the legacy training budget. Rows are labelled legacy.
 base: base.yaml
 
 data:
   dates: ["2018-11-13"]
+  inputs:
+    state: ["conc:NO", "conc:NO2", "conc:PM25_CL"]
+    forcing: ["meteo:TEMP2", "meteo:WSPD10", "meteo:WDIR10",
+              "emis:ALK1", "emis:OLE1", "emis:ARO1", "emis:ARO2", "emis:TERP", "emis:ISOP"]
+    static: []
+
+features:
+  include_o3_input: false
+  future_forcings: false
 
 split:
   mode: legacy

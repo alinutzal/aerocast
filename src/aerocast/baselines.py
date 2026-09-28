@@ -3,11 +3,7 @@ import warnings
 
 import numpy as np
 
-
-def hour_of_day(times):
-    """UTC hour of day of datetime64[h] timestamps. Local standard time is a fixed offset,
-    so grouping by UTC hour is the same as grouping by local hour."""
-    return ((times - times.astype("datetime64[D]")) // np.timedelta64(1, "h")).astype(np.int64)
+from aerocast.data import hour_of_day  # UTC hour; local standard time is a fixed offset from it
 
 
 def persistence(y, t, pred_len):

@@ -1,6 +1,7 @@
-"""ConvLSTM models, moved unchanged from legacy/grid_forcast.py."""
+"""ConvLSTM models from legacy/grid_forcast.py, plus the adapter to the shared batch interface."""
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 
 class ConvLSTMCell(nn.Module):
@@ -38,9 +39,10 @@ class ConvLSTMCell(nn.Module):
         return h, c
 
 class StackedConvLSTM(nn.Module):
-    def __init__(self, input_channels, hidden_dims=[64, 32], kernel_size=3):
+    def __init__(self, input_channels, hidden_dims=[64, 32], kernel_size=3, out_channels=1):
         super().__init__()
         self.hidden_dims = hidden_dims
+        self.grad_checkpointing = False  # recompute each time step in backward to save memory
 
         self.cell1 = ConvLSTMCell(input_channels, hidden_dims[0], kernel_size)
         self.bn1 = nn.BatchNorm2d(hidden_dims[0])
@@ -48,7 +50,19 @@ class StackedConvLSTM(nn.Module):
         self.cell2 = ConvLSTMCell(hidden_dims[0], hidden_dims[1], kernel_size)
         self.bn2 = nn.BatchNorm2d(hidden_dims[1])
 
-        self.out_conv = nn.Conv2d(hidden_dims[1], 1, kernel_size=1)
+        self.out_conv = nn.Conv2d(hidden_dims[1], out_channels, kernel_size=1)
+
+    def _step(self, x_t, h1, c1, h2, c2):
+        h1, c1 = self.cell1(x_t, h1, c1)
+        h1_bn = self.bn1(h1)
+        h2, c2 = self.cell2(h1_bn, h2, c2)
+        h2 = self.bn2(h2)
+        return h1, c1, h2, c2
+
+    def _run_step(self, x_t, h1, c1, h2, c2):
+        if self.grad_checkpointing and self.training:
+            return checkpoint(self._step, x_t, h1, c1, h2, c2, use_reentrant=False)
+        return self._step(x_t, h1, c1, h2, c2)
 
     def forward(self, x, pred_steps=1, future_x=None):
         # x: (B, T, C, H, W) - process all T time steps
@@ -70,12 +84,7 @@ class StackedConvLSTM(nn.Module):
         # Process all time steps sequentially through ConvLSTM
         for t in range(T):
             x_t = x[:, t]  # (B, C, H, W)
-            
-            h1, c1 = self.cell1(x_t, h1, c1)
-            h1_bn = self.bn1(h1)
-            
-            h2, c2 = self.cell2(h1_bn, h2, c2)
-            h2 = self.bn2(h2)
+            h1, c1, h2, c2 = self._run_step(x_t, h1, c1, h2, c2)
 
         # Generate predictions for multiple future steps
         # Continue evolving hidden states autoregressively
@@ -89,12 +98,35 @@ class StackedConvLSTM(nn.Module):
             if step < pred_steps - 1:  # Don't update for last step
                 # Continue evolving hidden states using last input (or the next future frame)
                 x_next = x_last if future_x is None else future_x[:, step]
-                h1, c1 = self.cell1(x_next, h1, c1)
-                h1_bn = self.bn1(h1)
-                h2, c2 = self.cell2(h1_bn, h2, c2)
-                h2 = self.bn2(h2)
+                h1, c1, h2, c2 = self._run_step(x_next, h1, c1, h2, c2)
         
         if pred_steps == 1:
             return predictions[0]  # (B, H, W)
         else:
             return torch.stack(predictions, dim=1)  # (B, pred_steps, H, W)
+
+
+class ConvLSTMForecaster(nn.Module):
+    """StackedConvLSTM over hourly frames [state, forcing, static].
+
+    It encodes the T_in input hours, then rolls out one hour at a time. The frame fed before
+    predicting hour t+k+1 carries the forcing of hour t+k, with the state held at the last
+    input hour (the model never sees future concentrations).
+    """
+
+    def __init__(self, spec, hidden_dims=(64, 32), kernel_size=3, grad_checkpointing=False):
+        super().__init__()
+        self.spec = spec
+        self.net = StackedConvLSTM(spec.frame_channels, list(hidden_dims), kernel_size, out_channels=spec.k)
+        self.net.grad_checkpointing = grad_checkpointing
+
+    def forward(self, batch):
+        state, forcing, static = batch["state"], batch["forcing"], batch["static"].unsqueeze(1)
+        t_in = state.shape[1]
+        t_out = forcing.shape[1] - t_in
+        frames = torch.cat([state, forcing[:, :t_in], static.expand(-1, t_in, -1, -1, -1)], dim=2)
+        rollout = torch.cat([state[:, -1:].expand(-1, t_out - 1, -1, -1, -1),
+                             forcing[:, t_in:t_in + t_out - 1],
+                             static.expand(-1, t_out - 1, -1, -1, -1)], dim=2)
+        out = self.net(frames, pred_steps=t_out, future_x=rollout)
+        return out.reshape(out.shape[0], t_out, self.spec.k, *out.shape[-2:])

@@ -1,8 +1,9 @@
-# AeroCast Phase 1 base configuration.
+# AeroCast base configuration.
 # Other configs inherit from it with `base: base.yaml` and override only what differs.
-# Any value can also be overridden on the command line, e.g.
-#   uv run aerocast-train --config configs/smoke.yaml --set train.epochs=2
+# `--model NAME` swaps in configs/models/NAME.yaml, and any value can be overridden, e.g.
+#   uv run aerocast-train --config configs/smoke.yaml --model unet --set train.epochs=2
 seed: 42
+target_mode: ox             # ox | species | multitask
 
 data:
   data_dir: datasets
@@ -19,20 +20,27 @@ data:
   # Days to load. null = every day in data_dir that falls inside the split blocks.
   dates: null
   cache_dir: cache          # preprocessed arrays, so each NetCDF file is read once
-  # Quote variable names: unquoted NO is parsed by YAML as false.
+  local_utc_offset_hours: -8  # local standard time (PST) for the hour-of-day channels
+  # Channels are "source:VAR". Sources: meteo (METCRO2D), conc (out.combine), emis
+  # (emissions), time (derived hour of day) and grid (derived coordinates). meteo:U10 and
+  # meteo:V10 are derived from WSPD10 and WDIR10.
   inputs:
-    meteo: ["TEMP2", "WSPD10", "WDIR10"]                    # METCRO2D
-    state: ["NO", "NO2", "PM25_CL"]                         # out.combine (past chemical state)
-    emis: ["ALK1", "OLE1", "ARO1", "ARO2", "TERP", "ISOP"]  # egts_l
-  target: ["NO2", "O3"]     # Ox = NO2 + O3, from out.combine
+    # Past chemical state, hours t-6 .. t-1 (+ conc:O3 with features.include_o3_input).
+    state: ["conc:NO", "conc:NO2", "conc:PM25_CL"]
+    # Known drivers, hours t-6 .. t+9 with features.future_forcings.
+    forcing: ["meteo:TEMP2", "meteo:WSPD10", "meteo:U10", "meteo:V10",
+              "emis:NO", "emis:NO2", "emis:HONO",
+              "emis:ALK1", "emis:OLE1", "emis:ARO1", "emis:ARO2", "emis:TERP", "emis:ISOP",
+              "time:HOUR_SIN", "time:HOUR_COS"]
+    static: ["grid:X", "grid:Y"]
+  target: ["NO2", "O3"]     # species from out.combine; Ox = NO2 + O3
   seq_len: 6                # input hours
   pred_len: 10              # forecast lead hours
   normalization: full       # none | predictors | full (inputs and target)
 
 features:
-  include_o3_input: false   # add O3 to the past-state input channels
-  future_forcings: false    # rollout feeds each forecast hour's meteorology and emissions
-                            # instead of repeating the last input frame
+  include_o3_input: true    # add O3 to the past-state input channels
+  future_forcings: true     # forcing covers the forecast hours; off, hour t-1 is repeated
 
 split:
   mode: dates               # dates | smoke_test | legacy
@@ -44,10 +52,11 @@ split:
   val: ["2018-11-21", "2018-11-25"]
   test: ["2018-11-26", "2018-11-30"]
 
-model:
-  name: StackedConvLSTM
+model:                      # replaced by --model configs/models/<name>.yaml
+  name: convlstm
   hidden_dims: [64, 32]
   kernel_size: 3
+  grad_checkpointing: false
 
 train:
   batch_size: 4
@@ -59,10 +68,13 @@ train:
   scheduler: {T_0: 50, T_mult: 2, eta_min: 1.0e-6}  # CosineAnnealingWarmRestarts
   loss: {type: mixed, huber_beta: 0.5, alpha: 0.7}  # alpha * Huber + (1 - alpha) * MSE
   log_every: 5
+  amp: none                 # none | bf16 (autocast)
 
 output:
   runs_dir: runs            # one directory per run: config, git commit, stats, checkpoint
   results_csv: results/results.csv
+  experiments_md: EXPERIMENTS.md   # one line per run
+  note: ""                  # free text for EXPERIMENTS.md (aerocast-train --note)
 
 logging:
   wandb: false

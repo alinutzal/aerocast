@@ -7,7 +7,8 @@ from pathlib import Path
 import yaml
 
 # Sections that name outputs or logging rather than the experiment; excluded from the hash.
-_UNHASHED = ("name", "output", "logging")
+_UNHASHED = ("name", "output", "logging", "tuning")
+MODEL_DIR = Path(__file__).resolve().parents[2] / "configs" / "models"
 
 
 def deep_merge(base, override):
@@ -42,11 +43,25 @@ def set_dotted(cfg, key, value):
     node[leaf] = value
 
 
-def load_config(path, overrides=None):
-    """Load a config file. `overrides` are "section.key=value" strings; values are parsed as YAML."""
+def model_file(model):
+    """A model config: an existing YAML path, or a name in the repo's configs/models/."""
+    path = Path(model)
+    if path.suffix in (".yaml", ".yml") or path.exists():
+        return path
+    return MODEL_DIR / f"{model}.yaml"
+
+
+def load_config(path, overrides=None, model=None):
+    """Load a config file. `model` (a name in configs/models/ or a path) replaces the model section
+    and merges the rest of that file; `overrides` are "section.key=value" strings parsed as YAML."""
     path = Path(path)
     cfg = _read(path)
     cfg.setdefault("name", path.stem)
+    if model:
+        model_cfg = _read(model_file(model))
+        cfg["model"] = model_cfg.pop("model")
+        cfg = deep_merge(cfg, model_cfg)
+        cfg["name"] = f"{cfg['name']}-{cfg['model']['name']}"
     for item in overrides or []:
         key, sep, raw = item.partition("=")
         if not sep:

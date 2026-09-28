@@ -16,7 +16,7 @@ import xarray as xr
 UTC_OFFSET = 8  # local standard time (PST) = UTC - 8
 METEO = {"TEMP2": "K", "WSPD10": "M/S", "WDIR10": "DEGREES"}
 CONC = {"NO": "ppbV", "NO2": "ppbV", "PM25_CL": "ug m-3", "O3": "ppbV"}
-EMIS_SCALE = {"NO": 0.3, "NO2": 0.03, "ALK1": 0.5, "OLE1": 0.004, "ARO1": 0.006, "ARO2": 0.005,
+EMIS_SCALE = {"NO": 0.3, "NO2": 0.03, "HONO": 0.003, "ALK1": 0.5, "OLE1": 0.004, "ARO1": 0.006, "ARO2": 0.005,
               "TERP": 0.0005, "ISOP": 0.00008}
 
 

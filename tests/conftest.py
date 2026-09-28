@@ -44,6 +44,7 @@ def make_cfg(synthetic_dir, tmp_path):
             "train.log_every": 1,
             "output.runs_dir": str(tmp_path / "runs"),
             "output.results_csv": str(tmp_path / "results" / "results.csv"),
+            "output.experiments_md": str(tmp_path / "EXPERIMENTS.md"),
         }
         settings.update(overrides or {})
         for key, value in settings.items():

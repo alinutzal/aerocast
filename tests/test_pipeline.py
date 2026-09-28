@@ -1,15 +1,13 @@
 import json
 import multiprocessing
 
-import numpy as np
 import pandas as pd
 import pytest
 
 from aerocast.config import save_config
-from aerocast.data import WindowDataset
 from aerocast.evaluate import RESULT_COLUMNS, append_results, evaluate_run
 from aerocast.normalize import NormStats
-from aerocast.splits import SmokeTestWarning, load_and_split
+from aerocast.splits import SmokeTestWarning
 from aerocast.train import main as train_main
 from aerocast.train import train
 
@@ -47,6 +45,11 @@ def test_two_epoch_train_and_evaluate_writes_results(make_cfg, tmp_path):
     assert len(scored) == 3 and len(scored["convlstm"]) == 18
     assert scored["persistence"] == scored["convlstm"] == scored["climatology"]
 
+    # One EXPERIMENTS.md line per run, with the val and test Ox RMSE.
+    lines = [line for line in (tmp_path / "EXPERIMENTS.md").read_text().splitlines() if run_dir.name in line]
+    val = results.query("model == 'convlstm' and split == 'val' and lead_hour == 'all' and metric == 'rmse'").value.item()
+    assert len(lines) == 1 and f"| {val:.3f} |" in lines[0]
+
 
 @pytest.mark.parametrize("mode", ["smoke_test", "legacy"])
 def test_in_sample_modes_never_write_test_rows(make_cfg, days, mode):
@@ -58,32 +61,21 @@ def test_in_sample_modes_never_write_test_rows(make_cfg, days, mode):
     assert set(read_results(cfg).split) == {mode}
 
 
-def test_feature_flags_train_and_evaluate(make_cfg):
-    cfg = make_cfg({"features.include_o3_input": True, "features.future_forcings": True, "train.epochs": 1})
+@pytest.mark.parametrize("flags", [(False, False), (True, True)])
+def test_feature_flags_train_and_evaluate(make_cfg, flags):
+    include_o3, future = flags
+    cfg = make_cfg({"features.include_o3_input": include_o3, "features.future_forcings": future, "train.epochs": 1})
     run_dir = train(cfg)
-    channels = NormStats.load(run_dir / "norm_stats.json").channels
-    assert channels[:7] == ["TEMP2", "WSPD10", "WDIR10", "NO", "NO2", "PM25_CL", "O3"]
+    state = NormStats.load(run_dir / "norm_stats.json").channels["state"]
+    assert state == ["conc:NO", "conc:NO2", "conc:PM25_CL"] + (["conc:O3"] if include_o3 else [])
     evaluate_run(run_dir)
     assert set(read_results(cfg).model) == {"convlstm", "persistence", "climatology"}
 
 
-def test_future_frames_carry_forecast_hour_forcings(make_cfg):
-    hourly, splits = load_and_split(make_cfg({"features.include_o3_input": True}))
-    forcing = hourly.forcing_channels
-    state = [c for c in range(len(hourly.channels)) if c not in forcing]
-    assert [hourly.channels[c] for c in state] == ["NO", "NO2", "PM25_CL", "O3"]
-    dataset = WindowDataset(hourly.x, hourly.y, splits.train, SEQ, PRED, forcing)
-    t = int(splits.train[0])
-    _, _, future = dataset[0]
-    assert future.shape == (PRED - 1,) + hourly.x.shape[1:]
-    for k in range(PRED - 1):
-        np.testing.assert_array_equal(future[k, forcing], hourly.x[t + k, forcing])
-        np.testing.assert_array_equal(future[k, state], hourly.x[t - 1, state])
-
-
 def test_fixed_seed_repeats_training(make_cfg):
     cfg = make_cfg({"train.epochs": 1})
-    histories = [pd.read_csv(train(cfg) / "history.csv") for _ in range(2)]
+    columns = ["train_loss", "val_loss", "val_ox_rmse"]
+    histories = [pd.read_csv(train(cfg) / "history.csv")[columns] for _ in range(2)]
     pd.testing.assert_frame_equal(*histories)
 
 

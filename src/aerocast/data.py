@@ -4,6 +4,11 @@ Each day has three files (meteorology, concentrations, emissions). Their TFLAG
 timestamps, shifted by `data.time_offset_hours`, are intersected so every hour kept
 has all three sources. Days are concatenated in time order; a window is only built
 over consecutive hours, so gaps between days are never bridged.
+
+Channels are named "source:VAR". File sources are meteo (METCRO2D), conc (out.combine)
+and emis (emissions), so the emission and concentration NO/NO2 stay distinct. Derived
+channels: meteo:U10/meteo:V10 (from WSPD10 and WDIR10), time:HOUR_SIN/time:HOUR_COS
+(local hour of day) and grid:X/grid:Y (grid coordinates scaled to [0, 1]).
 """
 import fnmatch
 import glob
@@ -22,8 +27,11 @@ import xarray as xr
 from torch.utils.data import Dataset
 
 SOURCES = ("meteo", "conc", "emis")
+DERIVED_WIND = ("U10", "V10")
+TIME_CHANNELS = ("HOUR_SIN", "HOUR_COS")
+GRID_CHANNELS = ("X", "Y")
 HOUR = np.timedelta64(1, "h")
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 
 def to_day(value):
@@ -36,6 +44,57 @@ def to_day(value):
 
 def _stamp(day):
     return str(to_day(day)).replace("-", "")
+
+
+def hour_of_day(times):
+    """Hour of day (0-23) of datetime64[h] timestamps."""
+    return ((times - times.astype("datetime64[D]")) // HOUR).astype(np.int64)
+
+
+def split_channel(name):
+    """'emis:NO' -> ('emis', 'NO')."""
+    if not isinstance(name, str):
+        raise TypeError(f"Channel {name!r} is not a string; quote it in the YAML")
+    source, sep, var = name.partition(":")
+    if not sep or not var or source not in SOURCES + ("time", "grid"):
+        raise ValueError(f"Channel {name!r} must look like source:VAR with source in {SOURCES + ('time', 'grid')}")
+    if source == "time" and var not in TIME_CHANNELS:
+        raise ValueError(f"Unknown time channel {name!r}; expected one of {TIME_CHANNELS}")
+    if source == "grid" and var not in GRID_CHANNELS:
+        raise ValueError(f"Unknown grid channel {name!r}; expected one of {GRID_CHANNELS}")
+    return source, var
+
+
+def channel_layout(data_cfg, features_cfg):
+    """Channel names in model order: {"state": [...], "forcing": [...], "static": [...]}."""
+    inputs = data_cfg["inputs"]
+    state = list(inputs["state"])
+    if features_cfg.get("include_o3_input") and "conc:O3" not in state:
+        state.append("conc:O3")
+    layout = {"state": state, "forcing": list(inputs["forcing"]), "static": list(inputs.get("static") or [])}
+    for group, names in layout.items():
+        for name in names:
+            source, _ = split_channel(name)
+            if (source == "grid") != (group == "static"):
+                raise ValueError(f"{name}: grid channels, and only they, belong in data.inputs.static")
+            if source == "time" and group != "forcing":
+                raise ValueError(f"{name}: time channels are forcings")
+    return layout
+
+
+def source_variables(data_cfg, features_cfg):
+    """Raw variables to read from each file: file-backed channels, WSPD10/WDIR10 for the
+    derived winds, and the target species (from conc)."""
+    wanted = {source: [] for source in SOURCES}
+    layout = channel_layout(data_cfg, features_cfg)
+    for name in layout["state"] + layout["forcing"]:
+        source, var = split_channel(name)
+        if source == "meteo" and var in DERIVED_WIND:
+            wanted["meteo"] += ["WSPD10", "WDIR10"]
+        elif source in SOURCES:
+            wanted[source].append(var)
+    wanted["conc"] += [str(v) for v in data_cfg["target"]]
+    return {source: list(dict.fromkeys(names)) for source, names in wanted.items()}
 
 
 def day_files(data_cfg, day):
@@ -69,35 +128,6 @@ def available_days(data_cfg):
     return days
 
 
-def source_variables(data_cfg):
-    """Variables read from each source: the inputs plus the target (and O3 for the O3-input flag)."""
-    inputs = data_cfg["inputs"]
-    variables = {
-        "meteo": list(inputs["meteo"]),
-        "conc": list(dict.fromkeys(list(inputs["state"]) + list(data_cfg["target"]) + ["O3"])),
-        "emis": list(inputs["emis"]),
-    }
-    seen = {}
-    for source, names in variables.items():
-        for name in names:
-            if not isinstance(name, str):
-                raise TypeError(f"Variable name {name!r} in data.inputs/{source} is not a string; quote it in the YAML (NO parses as false)")
-            if seen.setdefault(name, source) != source:
-                raise ValueError(f"Variable {name} is configured for both {seen[name]} and {source}")
-    return variables
-
-
-def input_channels(data_cfg, features_cfg):
-    """Channel names in model order, and the indices of the forcing (meteorology + emission) channels."""
-    inputs = data_cfg["inputs"]
-    meteo, state, emis = list(inputs["meteo"]), list(inputs["state"]), list(inputs["emis"])
-    if features_cfg.get("include_o3_input") and "O3" not in state:
-        state.append("O3")
-    channels = meteo + state + emis
-    forcing = list(range(len(meteo))) + list(range(len(meteo) + len(state), len(channels)))
-    return channels, forcing
-
-
 def ioapi_times(ds):
     """UTC timestamp (datetime64[h]) of each TSTEP, from TFLAG or the SDATE/STIME/TSTEP attributes."""
     if "TFLAG" in ds:
@@ -120,7 +150,7 @@ def _ioapi_to_datetime(yyyyddd, hhmmss):
     return days.astype("datetime64[h]") + (hhmmss // 10000).astype("timedelta64[h]")
 
 
-def _read_source(path, variables, offset_hours):
+def _read_source(path, source, variables, offset_hours):
     with xr.open_dataset(path, engine="netcdf4", decode_times=False) as ds:
         times = ioapi_times(ds) + int(offset_hours) * HOUR
         if np.any(np.diff(times) <= np.timedelta64(0, "h")):
@@ -134,9 +164,20 @@ def _read_source(path, variables, offset_hours):
                 da = da.isel(LAY=0)  # surface layer
             if da.ndim != 3:
                 raise ValueError(f"{name} in {path.name} has unexpected dims {da.dims}")
-            fields[name] = np.asarray(da.values, dtype=np.float32)
-            units[name] = str(da.attrs.get("units", "")).strip()
+            fields[f"{source}:{name}"] = np.asarray(da.values, dtype=np.float32)
+            units[f"{source}:{name}"] = str(da.attrs.get("units", "")).strip()
     return times, fields, units
+
+
+def _add_wind_components(fields, units):
+    """meteo:U10/V10 from 10 m speed and direction (meteorological convention: the direction
+    the wind blows from, clockwise from north). The grid's rotation from true north is under
+    2 degrees on this domain and is ignored, so U10/V10 are treated as grid-relative."""
+    if "meteo:WSPD10" in fields and "meteo:WDIR10" in fields:
+        speed, direction = fields["meteo:WSPD10"], np.deg2rad(fields["meteo:WDIR10"])
+        fields["meteo:U10"] = (-speed * np.sin(direction)).astype(np.float32)
+        fields["meteo:V10"] = (-speed * np.cos(direction)).astype(np.float32)
+        units["meteo:U10"] = units["meteo:V10"] = units["meteo:WSPD10"]
 
 
 def _cache_path(data_cfg, day, files, variables, offsets):
@@ -153,13 +194,11 @@ def _cache_path(data_cfg, day, files, variables, offsets):
     return Path(data_cfg["cache_dir"]) / f"{_stamp(day)}_{digest}.npz"
 
 
-def load_day(data_cfg, day):
-    """One day's variables on the hours common to all three files: {"times", "fields", "units"}.
-
-    Results are cached as .npz under data.cache_dir, so each NetCDF file is read once.
-    """
+def load_day(data_cfg, features_cfg, day):
+    """One day's fields ("source:VAR") on the hours common to all three files:
+    {"times", "fields", "units"}. Cached as .npz under data.cache_dir, so NetCDF is read once."""
     files = day_files(data_cfg, day)
-    variables = source_variables(data_cfg)
+    variables = source_variables(data_cfg, features_cfg)
     offsets = {s: int((data_cfg.get("time_offset_hours") or {}).get(s, 0)) for s in SOURCES}
     cache = _cache_path(data_cfg, day, files, variables, offsets)
     if cache is not None and cache.exists():
@@ -170,7 +209,7 @@ def load_day(data_cfg, day):
                 "units": json.loads(str(z["units"])),
             }
 
-    read = {s: _read_source(files[s], variables[s], offsets[s]) for s in SOURCES}
+    read = {s: _read_source(files[s], s, variables[s], offsets[s]) for s in SOURCES}
     common = reduce(np.intersect1d, [times for times, _, _ in read.values()])
     if len(common) == 0:
         raise ValueError(f"{to_day(day)}: the three files share no hours; check data.time_offset_hours")
@@ -184,6 +223,7 @@ def load_day(data_cfg, day):
         for name, values in source_fields.items():
             fields[name] = values[index]
         units.update(source_units)
+    _add_wind_components(fields, units)
     shapes = {values.shape[1:] for values in fields.values()}
     if len(shapes) != 1:
         raise ValueError(f"{to_day(day)}: grids differ between files: {shapes}")
@@ -200,33 +240,57 @@ def load_day(data_cfg, day):
 
 @dataclass
 class HourlyData:
-    times: np.ndarray       # (T,) datetime64[h] UTC after time offsets, strictly increasing
-    days: np.ndarray        # (T,) datetime64[D] date of the file each hour came from
-    x: np.ndarray           # (T, C, H, W) float32 input channels, native units
-    y: np.ndarray           # (T, H, W) float32 target (Ox = sum of data.target), native units
-    channels: list
-    forcing_channels: list  # indices of meteorology + emission channels
+    times: np.ndarray    # (T,) datetime64[h] UTC after time offsets, strictly increasing
+    days: np.ndarray     # (T,) datetime64[D] date of the file each hour came from
+    state: np.ndarray    # (T, C_state, H, W) float32, native units
+    forcing: np.ndarray  # (T, C_forcing, H, W) float32, native units
+    static: np.ndarray   # (C_static, H, W) float32
+    targets: dict        # "NO2", "O3", ..., "Ox" -> (T, H, W) float32, native units
+    channels: dict       # {"state": [...], "forcing": [...], "static": [...]}
     target_unit: str
 
 
+def grid_channels(names, height, width):
+    """grid:X (column) and grid:Y (row) scaled to [0, 1]: (len(names), H, W)."""
+    yy, xx = np.meshgrid(np.linspace(0, 1, height), np.linspace(0, 1, width), indexing="ij")
+    values = {"grid:X": xx, "grid:Y": yy}
+    return np.stack([values[n] for n in names]).astype(np.float32) if names else np.zeros((0, height, width), np.float32)
+
+
 def load_hourly(data_cfg, features_cfg, days):
-    """Concatenate the given days into one hourly series of inputs and target."""
+    """Concatenate the given days into one hourly series of state, forcing, static and targets."""
     days = sorted(to_day(d) for d in days)
-    channels, forcing = input_channels(data_cfg, features_cfg)
-    parts = [load_day(data_cfg, day) for day in days]
+    layout = channel_layout(data_cfg, features_cfg)
+    parts = [load_day(data_cfg, features_cfg, day) for day in days]
 
     times = np.concatenate([p["times"] for p in parts])
     if np.any(np.diff(times) <= np.timedelta64(0, "h")):
         raise ValueError("Hours overlap between days; check data.time_offset_hours")
     day_of_hour = np.concatenate([np.full(len(p["times"]), day) for p, day in zip(parts, days)])
+    height, width = next(iter(parts[0]["fields"].values())).shape[1:]
 
-    x = np.stack([np.concatenate([p["fields"][c] for p in parts]) for c in channels], axis=1)
-    target = list(data_cfg["target"])
-    y = sum(np.concatenate([p["fields"][v] for p in parts]) for v in target).astype(np.float32)
-    target_units = {parts[0]["units"][v] for v in target}
+    local_hour = hour_of_day(times + int(data_cfg.get("local_utc_offset_hours", 0)) * HOUR)
+    angle = 2 * np.pi * local_hour / 24
+    time_values = {"time:HOUR_SIN": np.sin(angle).astype(np.float32), "time:HOUR_COS": np.cos(angle).astype(np.float32)}
+
+    def column(name):
+        if name in time_values:
+            return np.broadcast_to(time_values[name][:, None, None], (len(times), height, width))
+        return np.concatenate([p["fields"][name] for p in parts])
+
+    def stack(names):
+        if not names:
+            return np.zeros((len(times), 0, height, width), dtype=np.float32)
+        return np.stack([column(name) for name in names], axis=1).astype(np.float32)
+
+    species = [str(v) for v in data_cfg["target"]]
+    targets = {v: np.concatenate([p["fields"][f"conc:{v}"] for p in parts]) for v in species}
+    targets["Ox"] = sum(targets[v] for v in species).astype(np.float32)
+    target_units = {parts[0]["units"][f"conc:{v}"] for v in species}
     if len(target_units) != 1:
-        raise ValueError(f"Target variables {target} have different units: {target_units}")
-    return HourlyData(times, day_of_hour, x, y, channels, forcing, target_units.pop())
+        raise ValueError(f"Target variables {species} have different units: {target_units}")
+    return HourlyData(times, day_of_hour, stack(layout["state"]), stack(layout["forcing"]),
+                      grid_channels(layout["static"], height, width), targets, layout, target_units.pop())
 
 
 def window_starts(times, seq_len, pred_len, labels=None, label=None):
@@ -245,27 +309,31 @@ def window_starts(times, seq_len, pred_len, labels=None, label=None):
 
 
 class WindowDataset(Dataset):
-    """Samples (x, y) or, with forcing_channels, (x, y, future_x) from (normalized) hourly arrays.
+    """Samples {"state", "forcing", "static", "target"} from normalized hourly arrays.
 
-    future_x[k] is the rollout frame for hour t+k (k < pred_len - 1): forcing channels
-    from that hour, all other channels held at the last input hour t-1.
+    state: (T_in, C_state, H, W) for the input hours t-T_in .. t-1.
+    forcing: (T_in + T_out, C_forcing, H, W) for hours t-T_in .. t+T_out-1; without
+        future_forcings the forecast hours repeat hour t-1, so no future values are seen.
+    static: (C_static, H, W). target: (T_out, K, H, W) from targets (T, K, H, W).
     """
 
-    def __init__(self, x, y, starts, seq_len, pred_len, forcing_channels=None):
-        self.x, self.y = x, y
+    def __init__(self, state, forcing, static, targets, starts, t_in, t_out, future_forcings=True):
+        self.state, self.forcing, self.static, self.targets = state, forcing, torch.from_numpy(static), targets
         self.starts = np.asarray(starts, dtype=np.int64)
-        self.seq_len, self.pred_len = seq_len, pred_len
-        self.forcing_channels = forcing_channels
+        self.t_in, self.t_out, self.future_forcings = t_in, t_out, future_forcings
 
     def __len__(self):
         return len(self.starts)
 
     def __getitem__(self, i):
         t = int(self.starts[i])
-        x = torch.from_numpy(np.ascontiguousarray(self.x[t - self.seq_len:t]))
-        y = torch.from_numpy(np.ascontiguousarray(self.y[t:t + self.pred_len]))
-        if self.forcing_channels is None:
-            return x, y
-        future = np.repeat(self.x[t - 1:t], self.pred_len - 1, axis=0)
-        future[:, self.forcing_channels] = self.x[t:t + self.pred_len - 1][:, self.forcing_channels]
-        return x, y, torch.from_numpy(future)
+        if self.future_forcings:
+            forcing = self.forcing[t - self.t_in:t + self.t_out]
+        else:
+            forcing = np.concatenate([self.forcing[t - self.t_in:t], np.repeat(self.forcing[t - 1:t], self.t_out, axis=0)])
+        return {
+            "state": torch.from_numpy(np.ascontiguousarray(self.state[t - self.t_in:t])),
+            "forcing": torch.from_numpy(np.ascontiguousarray(forcing)),
+            "static": self.static,
+            "target": torch.from_numpy(np.ascontiguousarray(self.targets[t:t + self.t_out])),
+        }
