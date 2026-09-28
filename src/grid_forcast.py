@@ -5,6 +5,12 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 import os
+import argparse
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
 
 import torch
 import torch.nn as nn
@@ -17,7 +23,7 @@ import torch
 from torch.utils.data import Dataset
 
 class GridForecastSequenceDataset(Dataset):
-    def __init__(self, meteo_path, conc_path, emis_path, vars_X, var_NO2, var_O3, seq_len=3, pred_len=10, t_max=None):
+    def __init__(self, meteo_path, conc_path, emis_path, vars_X, var_NO2, var_O3, seq_len=3, pred_len=10, t_max=None, normalization_mode="full"):
         self.ds_meteo = xr.open_dataset(meteo_path, engine="netcdf4")
         self.ds_conc = xr.open_dataset(conc_path, engine="netcdf4")
         self.ds_emis = xr.open_dataset(emis_path, engine="netcdf4")
@@ -27,6 +33,14 @@ class GridForecastSequenceDataset(Dataset):
         self.var_O3 = var_O3
         self.seq_len = seq_len
         self.pred_len = pred_len  # Number of future steps to predict
+        self.normalization_mode = normalization_mode.lower()
+
+        valid_modes = {"none", "predictors", "full"}
+        if self.normalization_mode not in valid_modes:
+            raise ValueError(
+                f"Invalid normalization_mode '{normalization_mode}'. "
+                f"Choose from: {sorted(valid_modes)}"
+            )
 
         self.X_all = []
         self.Y_all = []
@@ -81,24 +95,27 @@ class GridForecastSequenceDataset(Dataset):
             self.X_all.append(torch.tensor(X_seq, dtype=torch.float32))
             self.Y_all.append(torch.tensor(Y_seq, dtype=torch.float32))
         
-        # Compute normalization stats per channel
-        X_stack = torch.stack(self.X_all)  # (N, T, C, H, W)
-        Y_stack = torch.stack(self.Y_all)  # (N, pred_len, H, W)
-        
-        # Mean/std per channel across all samples, timesteps, and spatial dims
-        self.X_mean = X_stack.mean(dim=(0, 1, 3, 4))  # (C,)
-        self.X_std = X_stack.std(dim=(0, 1, 3, 4)) + 1e-6  # (C,)
-        self.Y_mean = Y_stack.mean()
-        self.Y_std = Y_stack.std() + 1e-6
-        
-        # Normalize - broadcast over T, H, W dimensions
-        for i in range(len(self.X_all)):
-            # self.X_all[i] shape: (T, C, H, W)
-            # Reshape mean/std to (1, C, 1, 1) for broadcasting
-            mean = self.X_mean.view(1, -1, 1, 1)
-            std = self.X_std.view(1, -1, 1, 1)
-            self.X_all[i] = (self.X_all[i] - mean) / std
-            self.Y_all[i] = (self.Y_all[i] - self.Y_mean) / self.Y_std
+        if self.normalization_mode in {"predictors", "full"}:
+            X_stack = torch.stack(self.X_all)  # (N, T, C, H, W)
+            # Mean/std per channel across all samples, timesteps, and spatial dims
+            self.X_mean = X_stack.mean(dim=(0, 1, 3, 4))  # (C,)
+            self.X_std = X_stack.std(dim=(0, 1, 3, 4)) + 1e-6  # (C,)
+
+            # Normalize predictors only
+            for i in range(len(self.X_all)):
+                # self.X_all[i] shape: (T, C, H, W)
+                # Reshape mean/std to (1, C, 1, 1) for broadcasting
+                mean = self.X_mean.view(1, -1, 1, 1)
+                std = self.X_std.view(1, -1, 1, 1)
+                self.X_all[i] = (self.X_all[i] - mean) / std
+
+        if self.normalization_mode == "full":
+            Y_stack = torch.stack(self.Y_all)  # (N, pred_len, H, W)
+            self.Y_mean = Y_stack.mean()
+            self.Y_std = Y_stack.std() + 1e-6
+
+            for i in range(len(self.Y_all)):
+                self.Y_all[i] = (self.Y_all[i] - self.Y_mean) / self.Y_std
 
     def __len__(self):
         return len(self.X_all)
@@ -119,17 +136,57 @@ predictor_vars = ['TEMP2', 'WSPD10', 'WDIR10', 'NO', 'NO2', 'PM25_CL', 'ALK1', '
 target_no2 = 'NO2'
 target_o3 = 'O3'
 
+# CLI configuration
+parser = argparse.ArgumentParser(description="Train ConvLSTM grid forecast model")
+parser.add_argument(
+    "--normalization-mode",
+    choices=["none", "predictors", "full"],
+    default="full",
+    help="Normalization mode: none | predictors | full"
+)
+parser.add_argument(
+    "--wandb",
+    action="store_true",
+    help="Enable Weights & Biases tracking"
+)
+parser.add_argument(
+    "--wandb-project",
+    type=str,
+    default="aerocast",
+    help="W&B project name"
+)
+parser.add_argument(
+    "--wandb-entity",
+    type=str,
+    default=None,
+    help="W&B entity/team name (optional)"
+)
+parser.add_argument(
+    "--wandb-run-name",
+    type=str,
+    default=None,
+    help="W&B run name (optional)"
+)
+args = parser.parse_args()
+
+# Normalization mode:
+#   "none"       -> no normalization
+#   "predictors" -> normalize only predictor_vars (X)
+#   "full"       -> normalize X and Y (current/default behavior)
+NORMALIZATION_MODE = args.normalization_mode
+
 # Create dataset
 dataset = GridForecastSequenceDataset(
     meteo_path=meteo_path,
     conc_path=conc_path,
     emis_path=emis_path,
-    vars_X=['TEMP2', 'WSPD10', 'WDIR10', 'NO', 'NO2', 'PM25_CL', 'ALK1', 'OLE1', 'ARO1', 'ARO2', 'TERP', 'ISOP'],
-    var_NO2='NO2',
-    var_O3='O3',
+    vars_X=predictor_vars,
+    var_NO2=target_no2,
+    var_O3=target_o3,
     seq_len=6,     # Input sequence length - use 6 past time steps
     pred_len=10,   # Predict 10 future time steps
-    t_max=50       # Optional: limit for debugging
+    t_max=50,      # Optional: limit for debugging
+    normalization_mode=NORMALIZATION_MODE
 )
 dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
 
@@ -294,19 +351,51 @@ LOSS_LABEL = (
     else f"Huber(beta={HUBER_BETA})"
 )
 
+wandb_enabled = bool(args.wandb)
+if wandb_enabled and wandb is None:
+    raise ImportError("Weights & Biases is not installed. Install with: pip install wandb")
+
+if wandb_enabled:
+    wandb.init(
+        project=args.wandb_project,
+        entity=args.wandb_entity,
+        name=args.wandb_run_name,
+        config={
+            "normalization_mode": NORMALIZATION_MODE,
+            "seq_len": dataset.seq_len,
+            "pred_len": dataset.pred_len,
+            "batch_size": 4,
+            "epochs": 300,
+            "patience": 30,
+            "loss_type": LOSS_TYPE,
+            "huber_beta": HUBER_BETA,
+            "alpha": ALPHA,
+            "learning_rate": 1e-3,
+            "weight_decay": 1e-5,
+            "model": "StackedConvLSTM",
+            "hidden_dims": [64, 32]
+        }
+    )
+    wandb.watch(model, log="gradients", log_freq=50)
+
 # Dataloader (you already created it)
 dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
 
 print(f"\nTraining on {device}")
 print(f"Dataset size: {len(dataset)} samples")
-print(f"Data normalized: X_mean={dataset.X_mean.mean():.4f}, Y_mean={dataset.Y_mean:.4f}\n")
+if dataset.normalization_mode == "none":
+    print("Normalization: none\n")
+elif dataset.normalization_mode == "predictors":
+    print(f"Normalization: predictors only | X_mean={dataset.X_mean.mean():.4f}\n")
+else:
+    print(f"Normalization: full | X_mean={dataset.X_mean.mean():.4f}, Y_mean={dataset.Y_mean:.4f}\n")
 
 # Training with early stopping
 best_loss = float('inf')
 patience_counter = 0
 patience = 30
 
-for epoch in range(300):
+for epoch in range(500):
     model.train()
     total_loss = 0.0
     sse_sum = 0.0  # sum of squared errors across all elements
@@ -343,6 +432,15 @@ for epoch in range(300):
     
     if (epoch + 1) % 5 == 0:
         print(f"Epoch {epoch+1:03d} - {LOSS_LABEL}: {avg_loss:.4f} | RMSE: {rmse_epoch:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f} | Best: {best_loss:.4f}")
+
+    if wandb_enabled:
+        wandb.log({
+            "epoch": epoch + 1,
+            "train/loss": avg_loss,
+            "train/rmse": rmse_epoch,
+            "train/lr": optimizer.param_groups[0]['lr'],
+            "train/best_loss": best_loss
+        })
     
     if patience_counter >= patience:
         print(f"\nEarly stopping at epoch {epoch+1} - no improvement for {patience} epochs")
@@ -355,17 +453,23 @@ model.eval()
 os.makedirs("results", exist_ok=True)
 
 with torch.no_grad():
+    all_sample_rmse = []
     for sample_idx in range(len(dataset)):
         X_sample, Y_sample = dataset[sample_idx]
         X_sample_batch = X_sample.unsqueeze(0).to(device)  # Add batch dim
         pred_sample = model(X_sample_batch, pred_steps=dataset.pred_len).cpu().squeeze(0)  # (pred_len, H, W)
-        
-        # Denormalize for visualization
-        Y_sample_denorm = Y_sample * dataset.Y_std + dataset.Y_mean  # (pred_len, H, W)
-        pred_sample_denorm = pred_sample * dataset.Y_std + dataset.Y_mean  # (pred_len, H, W)
+
+        # Denormalize targets/predictions only when Y was normalized (full mode)
+        if dataset.normalization_mode == "full":
+            Y_sample_denorm = Y_sample * dataset.Y_std + dataset.Y_mean  # (pred_len, H, W)
+            pred_sample_denorm = pred_sample * dataset.Y_std + dataset.Y_mean  # (pred_len, H, W)
+        else:
+            Y_sample_denorm = Y_sample
+            pred_sample_denorm = pred_sample
         
         # Compute overall RMSE for this sample
         sample_rmse = ((pred_sample_denorm - Y_sample_denorm) ** 2).mean().sqrt().item()
+        all_sample_rmse.append(sample_rmse)
         
         print(f"\nSample {sample_idx}: Overall RMSE = {sample_rmse:.3f}")
         
@@ -402,5 +506,15 @@ with torch.no_grad():
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f"  Plot saved to: {output_path}")
+
+        if wandb_enabled:
+            wandb.log({
+                f"eval/sample_{sample_idx:02d}_rmse": sample_rmse,
+                f"eval/sample_{sample_idx:02d}_plot": wandb.Image(output_path)
+            })
+
+if wandb_enabled and all_sample_rmse:
+    wandb.log({"eval/avg_sample_rmse": float(np.mean(all_sample_rmse))})
+    wandb.finish()
 
 print(f"\nAll {len(dataset)} sample plots saved to results/ directory")
