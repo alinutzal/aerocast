@@ -38,7 +38,7 @@ def load_run(name, run_dir):
     stats = NormStats.load(run_dir / "norm_stats.json")
     hourly, splits = load_and_split(cfg)
     spec = model_spec(cfg)
-    model = build_model(cfg).to(device)
+    model = build_model(cfg, stats).to(device)
     model.load_state_dict(torch.load(run_dir / "best.pt", map_location=device)["model_state_dict"])
     model.eval()
     amp = cfg["train"].get("amp", "none")

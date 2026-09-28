@@ -17,3 +17,4 @@ One line per run, written by aerocast-evaluate.
 | 2026-09-28 | 20260928-172247_equates_2019_07_ca12km-convlstm_1ee3 | equates_pilot | convlstm | ox | 42 | 524ac3e71f | 3.516 | 3.629 | pilot: EQUATES 2019-07, CA 72x72 |
 | 2026-09-28 | 20260928-174140_equates_2019_07_ca12km-unet_c6ce | equates_pilot | unet | ox | 42 | 5be7941917 | 3.594 | 3.940 | pilot: EQUATES 2019-07, CA 72x72 |
 | 2026-09-28 | 20260928-174330_equates_2019_07_ca12km-fno_5938 | equates_pilot | fno | ox | 42 | 9cd3ee7d1f | 4.065 | 4.292 | pilot: EQUATES 2019-07, CA 72x72 |
+| 2026-09-28 | 20260928-182619_equates_2019_07_ca12km-fno_04fe | equates_pilot | fno | ox | 42 | 635b85984a | 4.098 | 4.287 | pilot: EQUATES 2019-07, CA 72x72; FNO positivity constraint enabled |

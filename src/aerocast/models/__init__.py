@@ -52,12 +52,20 @@ def model_spec(cfg):
                      tuple(layout["forcing"]), tuple(layout["static"]), tuple(target_channels(cfg)))
 
 
-def build_model(cfg):
+def build_model(cfg, stats=None):
+    """`stats` (fitted NormStats) is only used when the model config sets enforce_positive:
+    true, to compute each target channel's floor in normalized units (any model can opt into
+    this, not just FNO - see FNOForecaster for what it does with it). Without stats (e.g. a
+    model built to inspect its shape/parameters before data is loaded), enforce_positive
+    still works, just with the floor defaulting to 0 until a real checkpoint is loaded."""
     params = dict(cfg["model"])
     name = params.pop("name")
     if name not in REGISTRY:
         raise ValueError(f"Unknown model {name!r}; registered: {sorted(REGISTRY)}")
-    return REGISTRY[name](model_spec(cfg), **params)
+    spec = model_spec(cfg)
+    if params.get("enforce_positive") and stats is not None and stats.target_mean is not None:
+        params["target_floor"] = [-stats.target_mean[c] / stats.target_std[c] for c in spec.target_channels]
+    return REGISTRY[name](spec, **params)
 
 
 def count_parameters(model):

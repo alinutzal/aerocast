@@ -136,6 +136,37 @@ def test_fno_runs_at_twice_the_resolution(tiny_batch):
     assert out.shape == (2, T_OUT, 1, 32, 24) and torch.isfinite(out).all()
 
 
+def test_fno_enforce_positive_never_goes_below_the_floor():
+    """physical = std * normalized + mean >= 0 iff normalized >= -mean/std ("the floor"); with
+    enforce_positive, the raw FNO output can never push the (normalized) prediction below its
+    per-channel floor, even for adversarial inputs designed to try (unlike a plain positivity
+    activation on the raw output, which would also cut off the legitimate, common range of
+    negative-but-physical normalized values below the target mean)."""
+    floor = [-2.7, -0.4]  # e.g. NO2 (mean/std ~2.7) and Ox (mean/std ~0.4)
+    model = make_model("fno", targets=("NO2", "Ox"), enforce_positive=True, target_floor=floor).eval()
+    torch.manual_seed(0)
+    batch = random_batch()
+    for scale in (1.0, 1e4):  # 1e4: try to drive the pre-activation far below the floor
+        with torch.no_grad():
+            out = model({k: v * scale for k, v in batch.items()})
+        assert torch.isfinite(out).all()
+        assert out[:, :, 0].min() >= floor[0] - 1e-4
+        assert out[:, :, 1].min() >= floor[1] - 1e-4
+
+
+def test_build_model_computes_positivity_floor_from_fitted_stats():
+    from aerocast.models import build_model
+    from aerocast.normalize import NormStats
+
+    cfg = {"model": {"name": "fno", **SMALL["fno"], "enforce_positive": True},
+           "data": {"seq_len": T_IN, "pred_len": T_OUT, "inputs": {"state": list(STATE[:1]), "forcing": [], "static": []},
+                    "target": ["Ox"]},
+           "features": {}}
+    stats = NormStats(mode="full", channels={}, target_mean={"Ox": 30.0}, target_std={"Ox": 12.0})
+    model = build_model(cfg, stats)
+    torch.testing.assert_close(model.positivity_floor, torch.tensor([-30.0 / 12.0]))
+
+
 @pytest.mark.parametrize("name", MODELS)
 def test_checkpoint_round_trip_with_weights_only_loading(name, tmp_path):
     from aerocast.train import model_state

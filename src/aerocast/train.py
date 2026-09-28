@@ -135,7 +135,7 @@ def train(cfg):
                               generator=torch.Generator().manual_seed(cfg["seed"]))
     val_loader = DataLoader(datasets["val"], batch_size=train_cfg["batch_size"])
 
-    model = build_model(cfg).to(device)
+    model = build_model(cfg, stats).to(device)
     optimizer = optim.Adam(model.parameters(), lr=train_cfg["lr"], weight_decay=train_cfg["weight_decay"])
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, **train_cfg["scheduler"])
     loss_fn = TargetLoss(train_cfg["loss"], spec.target_channels, stats)

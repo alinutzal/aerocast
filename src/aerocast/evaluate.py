@@ -147,7 +147,7 @@ def evaluate_run(run_dir, results_csv=None, labels=None, rewrite_test=False):
     hourly, splits = load_and_split(cfg)
     if stats.channels != hourly.channels:
         raise ValueError(f"Run was trained on channels {stats.channels}, data has {hourly.channels}")
-    model = build_model(cfg).to(device)
+    model = build_model(cfg, stats).to(device)
     model.load_state_dict(torch.load(run_dir / "best.pt", map_location=device)["model_state_dict"])
     model.eval()
     model_name = cfg["model"]["name"]

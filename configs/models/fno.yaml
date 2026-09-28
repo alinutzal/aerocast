@@ -6,6 +6,7 @@ model:
   n_layers: 4
   domain_padding: 0.125     # fraction of the grid; the domain is not periodic
   grad_checkpointing: false
+  enforce_positive: true    # physical output >= 0 for every channel, exactly (see fno.py)
 
 train:
   amp: none                 # the operator runs in fp32 regardless: FFTs do not support bf16
