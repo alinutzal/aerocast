@@ -1,9 +1,10 @@
 """Load CMAQ day files, align them on common hours, cache the arrays and build windows.
 
-Each day has three files (meteorology, concentrations, emissions). Their TFLAG
-timestamps, shifted by `data.time_offset_hours`, are intersected so every hour kept
-has all three sources. Days are concatenated in time order; a window is only built
-over consecutive hours, so gaps between days are never bridged.
+Each day has one file per source configured in data.files (meteorology and concentrations
+always; emissions if the dataset has them). Their TFLAG timestamps, shifted by
+`data.time_offset_hours`, are intersected so every hour kept is present in all configured
+sources. Days are concatenated in time order; a window is only built over consecutive
+hours, so gaps between days are never bridged.
 
 Channels are named "source:VAR". File sources are meteo (METCRO2D), conc (out.combine)
 and emis (emissions), so the emission and concentration NO/NO2 stay distinct. Derived
@@ -83,24 +84,34 @@ def channel_layout(data_cfg, features_cfg):
 
 
 def source_variables(data_cfg, features_cfg):
-    """Raw variables to read from each file: file-backed channels, WSPD10/WDIR10 for the
-    derived winds, and the target species (from conc)."""
-    wanted = {source: [] for source in SOURCES}
+    """Raw variables to read from each configured file: file-backed channels, WSPD10/WDIR10
+    for the derived winds, and the target species (from conc)."""
+    wanted = {source: [] for source in configured_sources(data_cfg)}
     layout = channel_layout(data_cfg, features_cfg)
     for name in layout["state"] + layout["forcing"]:
         source, var = split_channel(name)
         if source == "meteo" and var in DERIVED_WIND:
             wanted["meteo"] += ["WSPD10", "WDIR10"]
-        elif source in SOURCES:
+        elif source in wanted:
             wanted[source].append(var)
     wanted["conc"] += [str(v) for v in data_cfg["target"]]
     return {source: list(dict.fromkeys(names)) for source, names in wanted.items()}
 
 
+def configured_sources(data_cfg):
+    """data.files keys with a non-null pattern. A dataset need not configure all of SOURCES -
+    EQUATES, for example, has no emis files. Since config `base:` inheritance merges dicts
+    key by key (it cannot remove an inherited key), a dataset config that wants fewer
+    sources than its base sets the unwanted ones to `null` (e.g. `files: {emis: null}`)
+    rather than omitting them."""
+    return [s for s, pattern in data_cfg["files"].items() if pattern is not None]
+
+
 def day_files(data_cfg, day):
-    """Paths of the meteo/conc/emis files for one day; each pattern must match exactly one file."""
+    """Paths of the configured per-day files (data.files keys, e.g. meteo/conc/emis); each
+    pattern must match exactly one file."""
     files = {}
-    for source in SOURCES:
+    for source in configured_sources(data_cfg):
         pattern = str(Path(data_cfg["data_dir"]) / data_cfg["files"][source].format(date=_stamp(day)))
         matches = sorted(glob.glob(pattern))
         if len(matches) != 1:
@@ -110,7 +121,7 @@ def day_files(data_cfg, day):
 
 
 def available_days(data_cfg):
-    """Days in data_dir for which all three files exist."""
+    """Days in data_dir for which every configured source's file exists."""
     meteo_pattern = data_cfg["files"]["meteo"]
     candidates = set()
     for path in glob.glob(str(Path(data_cfg["data_dir"]) / meteo_pattern.format(date="[0-9]" * 8))):
@@ -195,11 +206,11 @@ def _cache_path(data_cfg, day, files, variables, offsets):
 
 
 def load_day(data_cfg, features_cfg, day):
-    """One day's fields ("source:VAR") on the hours common to all three files:
+    """One day's fields ("source:VAR") on the hours common to all configured sources:
     {"times", "fields", "units"}. Cached as .npz under data.cache_dir, so NetCDF is read once."""
     files = day_files(data_cfg, day)
     variables = source_variables(data_cfg, features_cfg)
-    offsets = {s: int((data_cfg.get("time_offset_hours") or {}).get(s, 0)) for s in SOURCES}
+    offsets = {s: int((data_cfg.get("time_offset_hours") or {}).get(s, 0)) for s in configured_sources(data_cfg)}
     cache = _cache_path(data_cfg, day, files, variables, offsets)
     if cache is not None and cache.exists():
         with np.load(cache) as z:
@@ -209,7 +220,7 @@ def load_day(data_cfg, features_cfg, day):
                 "units": json.loads(str(z["units"])),
             }
 
-    read = {s: _read_source(files[s], s, variables[s], offsets[s]) for s in SOURCES}
+    read = {s: _read_source(files[s], s, variables[s], offsets[s]) for s in configured_sources(data_cfg)}
     common = reduce(np.intersect1d, [times for times, _, _ in read.values()])
     if len(common) == 0:
         raise ValueError(f"{to_day(day)}: the three files share no hours; check data.time_offset_hours")
@@ -250,6 +261,21 @@ class HourlyData:
     target_unit: str
 
 
+def _load_static_lon(data_cfg, height, width):
+    """LON (H, W) degrees east, from data.static_file (a NetCDF with a "LON" variable),
+    for data.local_solar_time."""
+    path = data_cfg.get("static_file")
+    if not path:
+        raise KeyError("data.local_solar_time requires data.static_file (a NetCDF with a LON variable)")
+    path = Path(data_cfg["data_dir"]) / path
+    with xr.open_dataset(path, engine="netcdf4") as ds:
+        lon = np.asarray(ds["LON"].values, dtype=np.float32)
+    lon = np.squeeze(lon)
+    if lon.shape != (height, width):
+        raise ValueError(f"{path}: LON has shape {lon.shape}, expected ({height}, {width})")
+    return lon
+
+
 def grid_channels(names, height, width):
     """grid:X (column) and grid:Y (row) scaled to [0, 1]: (len(names), H, W)."""
     yy, xx = np.meshgrid(np.linspace(0, 1, height), np.linspace(0, 1, width), indexing="ij")
@@ -269,13 +295,21 @@ def load_hourly(data_cfg, features_cfg, days):
     day_of_hour = np.concatenate([np.full(len(p["times"]), day) for p, day in zip(parts, days)])
     height, width = next(iter(parts[0]["fields"].values())).shape[1:]
 
-    local_hour = hour_of_day(times + int(data_cfg.get("local_utc_offset_hours", 0)) * HOUR)
+    if data_cfg.get("local_solar_time"):
+        # Local solar time per cell (UTC + longitude/15), for domains wide enough in
+        # longitude that a single UTC offset for the whole grid would be inaccurate.
+        lon = _load_static_lon(data_cfg, height, width)
+        utc_hour = ((times.astype(np.int64) % 24)[:, None, None]).astype(np.float32)
+        local_hour = (utc_hour + lon[None, :, :] / 15.0) % 24
+    else:
+        offset_hour = hour_of_day(times + int(data_cfg.get("local_utc_offset_hours", 0)) * HOUR)
+        local_hour = np.broadcast_to(offset_hour[:, None, None], (len(times), height, width)).astype(np.float32)
     angle = 2 * np.pi * local_hour / 24
     time_values = {"time:HOUR_SIN": np.sin(angle).astype(np.float32), "time:HOUR_COS": np.cos(angle).astype(np.float32)}
 
     def column(name):
         if name in time_values:
-            return np.broadcast_to(time_values[name][:, None, None], (len(times), height, width))
+            return time_values[name]
         return np.concatenate([p["fields"][name] for p in parts])
 
     def stack(names):

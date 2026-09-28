@@ -1,0 +1,71 @@
+# EQUATES pilot dataset: EPA EQUATES CMAQ run, July 2019, surface layer, central California.
+#
+# Source: EPA's public EQUATES v1 CMAQ output (concentrations) and CMAS Data Warehouse
+# (meteorology), both on S3, no credentials required. See DATA_CARD.md for provenance,
+# access dates, and known gaps (emissions are not included in this pilot - see below).
+#
+# Grid: a 72x72 read area on the CMAQ_12US1 Lambert Conformal Conic grid (12 km cells) -
+# a 64x64 core box plus a 4-cell boundary ring, both included in every output file (the
+# pipeline treats the full 72x72 read area as its grid; there is no separate crop step).
+# Box center (row 157, col 38 of the 299x459 CMAQ_12US1 grid) is at 38.883N, 121.629W,
+# shifted north from the literal 38.0N/121.3W request so the Los Angeles basin falls
+# clearly outside the read area (~115 km / ~9.6 cells of clearance) rather than right on
+# its edge. See data/pilot_checks/box_preview_v2.png for the box plotted over state lines.
+#
+# Built by scripts/extract_equates_pilot.py; run `python scripts/extract_equates_pilot.py
+# --config configs/data/equates_2019_07_ca12km.yaml` to (re)populate equates.extracted_dir.
+base: ../base.yaml
+
+equates:
+  source:
+    conc_bucket: epa-equates-v1
+    conc_key: CMAQ_12US1/OUTPUT/CONC3D/COMBINE_CONC3D_v532_cb6r3_ae7_aq_WR413_MYR_STAGE_2019_12US1_201907.nc
+    met_bucket: cmas-equates
+    met_tar_template: CMAQ_12US1/INPUT/2019/met/mcip_v51_wrf_v411_noltng/{mon:02d}/MCIPv51_WRFv411_noltng_12US1.35L.{date}.tar
+  box:
+    row0: 125   # core 64x64 box's first row (of the 299-row CMAQ_12US1 grid)
+    col0: 6     # core 64x64 box's first col (of the 459-col CMAQ_12US1 grid)
+    size: 64
+    ring: 4     # extra cells read on each side for boundary context; read area is 72x72
+  extracted_dir: /fs/ess/PLS0144/data/aerocast_equates/pilot/files
+  cache_dir: /fs/ess/PLS0144/data/aerocast_equates/pilot/kerchunk_cache   # byte-range index cache, not the pipeline's .npz cache
+
+data:
+  dataset: equates_pilot
+  data_dir: /fs/ess/PLS0144/data/aerocast_equates/pilot/files
+  files:
+    meteo: "equates_meteo_{date}.nc"
+    conc: "equates_conc_{date}.nc"
+    # emis: null cancels base.yaml's inherited BAAQMD emis pattern (base: merging is
+    # additive - it can't just omit a key). EQUATES gridded emissions are only available
+    # for 10 scattered July days on AWS (not the full month), so this pilot has no
+    # emissions stream; see DATA_CARD.md "Known gaps". data.py's configured_sources()
+    # drops null patterns, so this dataset runs with two sources instead of BAAQMD's three.
+    emis: null
+  # Both streams are IOAPI SDATE/STIME=2019<julian day>/0, hourly, UTC - no shift needed.
+  time_offset_hours: {meteo: 0, conc: 0}
+  dates: null
+  cache_dir: /fs/ess/PLS0144/data/aerocast_equates/pilot/npz_cache
+  local_solar_time: true       # per-cell local solar time (UTC + lon/15); the box spans ~8 deg of longitude
+  static_file: static.nc       # relative to data_dir; holds LAT, LON, HT, LWMASK (see DATA_CARD.md)
+  inputs:
+    # ATOTIJ (ug/m3, total Aitken + accumulation-mode aerosol) is EQUATES' PM2.5 analog,
+    # CB6r3's counterpart to BAAQMD's SAPRC PM25_CL - not the same species, see DATA_CARD.md.
+    state: ["conc:NO", "conc:NO2", "conc:ATOTIJ"]
+    forcing: ["meteo:TEMP2", "meteo:WSPD10", "meteo:U10", "meteo:V10",
+              "meteo:PBL", "meteo:RGRND", "meteo:Q2",
+              "time:HOUR_SIN", "time:HOUR_COS"]
+    static: ["grid:X", "grid:Y"]
+  target: ["NO2", "O3"]
+  seq_len: 6
+  pred_len: 10
+  normalization: full
+
+split:
+  mode: dates
+  train: ["2019-07-01", "2019-07-21"]
+  val: ["2019-07-22", "2019-07-26"]
+  test: ["2019-07-27", "2019-07-31"]
+
+output:
+  note: "pilot: EQUATES 2019-07, CA 72x72"

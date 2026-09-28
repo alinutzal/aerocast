@@ -29,6 +29,16 @@ dependencies = [
 aerocast-train = "aerocast.train:main"
 aerocast-evaluate = "aerocast.evaluate:main"
 
+[project.optional-dependencies]
+equates = [
+    "cartopy>=0.25.0",
+    "h5netcdf>=1.8.1",
+    "kerchunk>=0.2.7",
+    "numcodecs<0.13",
+    "pyproj>=3.7.1",
+    "s3fs==2024.9.0",
+]
+
 [dependency-groups]
 dev = [
   "pytest>=8.0",
@@ -56,3 +66,6 @@ packages = ["src/aerocast"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "slow: reads real remote/extracted data; excluded by default (deselect with '-m \"not slow\"' to run only the fast tests)",
+]

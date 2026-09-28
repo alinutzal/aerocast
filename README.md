@@ -112,6 +112,18 @@ loader warns. If a future batch of files is stamped differently, adjust the offs
 concatenated hourly, windows never bridge a missing day, and each day is read from NetCDF once
 (cached under `cache/`).
 
+**Other datasets.** The loader is config-driven, not tied to BAAQMD's file names or three-source
+layout: `data.files` lists whichever sources a dataset has (a source with no file is set to
+`null`, since config `base:` inheritance merges keys rather than removing them), and
+`data.local_solar_time: true` (with `data.static_file` giving a NetCDF with a `LON` variable)
+computes hour-of-day per cell instead of from one grid-wide UTC offset, for domains wide enough
+in longitude that a single offset would be inaccurate. `configs/data/equates_2019_07_ca12km.yaml`
+is the second dataset: a pilot built from EPA's public EQUATES CMAQ run (July 2019, central
+California, 12 km, meteorology + concentrations, no emissions - see `DATA_CARD.md`). Built by
+`scripts/extract_equates_pilot.py`, which reads the source files by byte range and never
+downloads them whole (CONC3D alone is 386 GB). `results.csv` and `EXPERIMENTS.md` have a
+`dataset` column/field so runs on different datasets share one results file.
+
 ## Splits
 
 `split.mode` in the config:

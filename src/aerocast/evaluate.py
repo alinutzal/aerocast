@@ -28,11 +28,11 @@ from aerocast.splits import load_and_split
 from aerocast.targets import physical
 from aerocast.train import predict_batch, window_datasets, write_json
 
-RESULT_COLUMNS = ["run_id", "model", "split", "lead_hour", "metric", "value", "config_hash", "git_commit"]
+RESULT_COLUMNS = ["run_id", "dataset", "model", "split", "lead_hour", "metric", "value", "config_hash", "git_commit"]
 BASELINES = ("persistence", "climatology")
 NOTES = {"smoke_test": "IN-SAMPLE smoke test, not a held-out result",
          "legacy": "in-sample, refactor check only"}
-EXPERIMENT_HEADER = ["date", "run id", "model", "target mode", "seed", "config hash", "val Ox RMSE", "test Ox RMSE", "note"]
+EXPERIMENT_HEADER = ["date", "run id", "dataset", "model", "target mode", "seed", "config hash", "val Ox RMSE", "test Ox RMSE", "note"]
 EVAL_DEFAULTS = {"high_ox_percentile": 95, "spectrum_leads": [1, 5, 10], "bootstrap_samples": 1000,
                  "bootstrap_seed": 0, "cell_km": 1.0}
 
@@ -81,7 +81,8 @@ def log_experiment(path, meta, rows):
     notes = [f"{label} Ox RMSE {ox_rmse(label):.3f} (in-sample)" for label in NOTES if ox_rmse(label) is not None]
     if meta.get("note"):
         notes.append(meta["note"])
-    cells = [meta["created"][:10], meta["run_id"], meta["model"], meta.get("target_mode", "ox"), str(meta["seed"]),
+    dataset = rows[0]["dataset"] if rows else "baaqmd"
+    cells = [meta["created"][:10], meta["run_id"], dataset, meta["model"], meta.get("target_mode", "ox"), str(meta["seed"]),
              meta["config_hash"], *(f"{v:.3f}" if v is not None else "–" for v in (ox_rmse("val"), ox_rmse("test"))),
              "; ".join(notes)]
     line = "| " + " | ".join(cells) + " |"
@@ -210,9 +211,9 @@ def evaluate_run(run_dir, results_csv=None, labels=None, rewrite_test=False):
             prefix = metric_prefix(variable)
             for lead, metric, value in (score.rows(prefix)
                                         + score.bootstrap_rows(ecfg["bootstrap_samples"], ecfg["bootstrap_seed"], prefix)):
-                rows.append({"run_id": meta["run_id"], "model": source, "split": label, "lead_hour": lead,
-                             "metric": metric, "value": f"{value:.6g}", "config_hash": meta["config_hash"],
-                             "git_commit": meta["git_commit"]})
+                rows.append({"run_id": meta["run_id"], "dataset": cfg["data"].get("dataset", "baaqmd"), "model": source,
+                             "split": label, "lead_hour": lead, "metric": metric, "value": f"{value:.6g}",
+                             "config_hash": meta["config_hash"], "git_commit": meta["git_commit"]})
             days, daily = score.daily()
             daily_rows += [{"split": label, "model": source, "variable": variable, "day": d, "lead_hour": k + 1,
                             **{f: float(daily[j, k, n]) for n, f in enumerate(FEATURES)}}

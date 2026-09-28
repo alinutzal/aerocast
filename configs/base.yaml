@@ -6,6 +6,7 @@ seed: 42
 target_mode: ox             # ox | species | multitask
 
 data:
+  dataset: baaqmd       # short id for results.csv's dataset column; distinguishes datasets sharing one results.csv
   data_dir: datasets
   # One file of each kind per day; {date} is YYYYMMDD. Glob patterns are allowed.
   files:
