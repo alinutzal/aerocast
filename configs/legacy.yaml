@@ -1,0 +1,9 @@
+# Refactor check only: train and evaluate on every window of the original day, as
+# legacy/grid_forcast.py does, with both feature flags off. Rows are labelled legacy.
+base: base.yaml
+
+data:
+  dates: ["2018-11-13"]
+
+split:
+  mode: legacy

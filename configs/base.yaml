@@ -1,0 +1,70 @@
+# AeroCast Phase 1 base configuration.
+# Other configs inherit from it with `base: base.yaml` and override only what differs.
+# Any value can also be overridden on the command line, e.g.
+#   uv run aerocast-train --config configs/smoke.yaml --set train.epochs=2
+seed: 42
+
+data:
+  data_dir: datasets
+  # One file of each kind per day; {date} is YYYYMMDD. Glob patterns are allowed.
+  files:
+    meteo: "METCRO2D_{date}.nc"
+    conc: "out.combine_{date}.nc"
+    emis: "egts_l.{date}.*.ncf"
+  # Hours added to each file's TFLAG to get UTC. METCRO2D and emissions are stamped
+  # 08Z-08Z (00-24 local standard time, PST = UTC-8). out.combine is stamped 00Z-23Z,
+  # but its O3 and NO diurnal cycles show it holds 00-23 PST, so it is shifted by 8 h.
+  # The loader keeps only hours present in all three files (24 per day when aligned).
+  time_offset_hours: {meteo: 0, conc: 8, emis: 0}
+  # Days to load. null = every day in data_dir that falls inside the split blocks.
+  dates: null
+  cache_dir: cache          # preprocessed arrays, so each NetCDF file is read once
+  # Quote variable names: unquoted NO is parsed by YAML as false.
+  inputs:
+    meteo: ["TEMP2", "WSPD10", "WDIR10"]                    # METCRO2D
+    state: ["NO", "NO2", "PM25_CL"]                         # out.combine (past chemical state)
+    emis: ["ALK1", "OLE1", "ARO1", "ARO2", "TERP", "ISOP"]  # egts_l
+  target: ["NO2", "O3"]     # Ox = NO2 + O3, from out.combine
+  seq_len: 6                # input hours
+  pred_len: 10              # forecast lead hours
+  normalization: full       # none | predictors | full (inputs and target)
+
+features:
+  include_o3_input: false   # add O3 to the past-state input channels
+  future_forcings: false    # rollout feeds each forecast hour's meteorology and emissions
+                            # instead of repeating the last input frame
+
+split:
+  mode: dates               # dates | smoke_test | legacy
+  # Contiguous date blocks, inclusive, by file date: [start, end] or a list of them.
+  # A window is kept only if all its input and target hours lie in one split.
+  # PLACEHOLDERS: set these once more days arrive. With the single day available
+  # now, use configs/smoke.yaml.
+  train: ["2018-11-01", "2018-11-20"]
+  val: ["2018-11-21", "2018-11-25"]
+  test: ["2018-11-26", "2018-11-30"]
+
+model:
+  name: StackedConvLSTM
+  hidden_dims: [64, 32]
+  kernel_size: 3
+
+train:
+  batch_size: 4
+  epochs: 500
+  patience: 30              # early stopping on validation loss
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  grad_clip: 1.0
+  scheduler: {T_0: 50, T_mult: 2, eta_min: 1.0e-6}  # CosineAnnealingWarmRestarts
+  loss: {type: mixed, huber_beta: 0.5, alpha: 0.7}  # alpha * Huber + (1 - alpha) * MSE
+  log_every: 5
+
+output:
+  runs_dir: runs            # one directory per run: config, git commit, stats, checkpoint
+  results_csv: results/results.csv
+
+logging:
+  wandb: false
+  wandb_project: aerocast
+  wandb_entity: null

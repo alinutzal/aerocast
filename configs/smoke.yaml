@@ -1,0 +1,10 @@
+# Single-day smoke test. With one day there is no clean held-out split, so training,
+# early stopping and evaluation all use the same windows. Rows are labelled
+# smoke_test: in-sample numbers that only show the pipeline runs end to end.
+base: base.yaml
+
+data:
+  dates: ["2018-11-13"]
+
+split:
+  mode: smoke_test
