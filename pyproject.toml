@@ -20,6 +20,9 @@ dependencies = [
   "monai==1.6.1",
   "einops==0.8.2",
   "torch-geometric==2.8.0.post1",
+  "mambapy==1.2.0",
+  # CUDA selective-scan kernel for the Mamba model (Linux, CUDA 12, torch 2.9, Python 3.12).
+  "mamba-ssm @ https://github.com/state-spaces/mamba/releases/download/v2.3.2.post1/mamba_ssm-2.3.2.post1+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version == '3.12'",
 ]
 
 [project.scripts]
@@ -34,6 +37,19 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+# aerocast only calls mamba-ssm's compiled scan kernel, so drop the dependencies its package
+# pulls in for its language models and Mamba-3 kernels (a never-true marker removes them).
+override-dependencies = [
+  "tilelang ; sys_platform == 'never'",
+  "apache-tvm-ffi ; sys_platform == 'never'",
+  "quack-kernels ; sys_platform == 'never'",
+  "transformers ; sys_platform == 'never'",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true  # the pinned mamba-ssm wheel URL
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aerocast"]

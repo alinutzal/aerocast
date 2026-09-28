@@ -23,6 +23,7 @@ SMALL = {
     "swin": {"feature_size": 12, "depths": [2, 2, 2, 1], "window_size": 7, "mlp_ratio": 2.0},
     "swin_unet": {"embed_dim": 16, "depths": [2, 2, 2], "num_heads": [2, 4, 8], "window_size": 7},
     "gnn": {"latent": 32, "processor_steps": 2},
+    "mamba": {"dim": 16, "depth": 2, "d_state": 4, "skip_channels": 8, "backend": "mambapy"},
 }
 MODELS = sorted(SMALL)
 
@@ -176,3 +177,36 @@ def test_gnn_edge_wind_is_the_along_edge_component():
     north = (unit[:, 0] == 0) & (unit[:, 1] == 1)
     assert east.any() and north.any()
     assert torch.all(along[east] == 1) and torch.all(along[north] == 0)
+
+
+needs_cuda_kernel = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA GPU and the mamba-ssm kernel")
+
+
+@needs_cuda_kernel
+def test_mamba_cuda_kernel_matches_the_pytorch_scan():
+    from aerocast.models.mamba import SelectiveScanCuda, selective_scan_cuda, selective_scan_torch
+    if selective_scan_cuda is None:
+        pytest.skip("mamba-ssm kernel not installed")
+    torch.manual_seed(0)
+    b, k, d, n, length = 2, 4, 8, 4, 50
+    cuda = {"device": "cuda", "requires_grad": True}
+    inputs = [torch.randn(b, k * d, length, **cuda), (0.1 * torch.randn(b, k * d, length, device="cuda")).requires_grad_(),
+              (-torch.rand(k * d, n, device="cuda") - 0.5).requires_grad_(), torch.randn(b, k, n, length, **cuda),
+              torch.randn(b, k, n, length, **cuda), torch.randn(k * d, **cuda), torch.randn(k * d, **cuda)]
+    out_cuda = SelectiveScanCuda.apply(*inputs, True)
+    out_ref = selective_scan_torch(*inputs, True)
+    torch.testing.assert_close(out_cuda, out_ref, rtol=1e-4, atol=1e-4)
+    for g_cuda, g_ref in zip(torch.autograd.grad(out_cuda.square().sum(), inputs),
+                             torch.autograd.grad(out_ref.square().sum(), inputs)):
+        torch.testing.assert_close(g_cuda, g_ref, rtol=1e-3, atol=1e-3)
+
+
+@needs_cuda_kernel
+def test_mamba_backends_agree_on_the_model():
+    torch.manual_seed(0)
+    reference = make_model("mamba").cuda().eval()
+    kernel = make_model("mamba", backend="mamba_ssm").cuda().eval()
+    kernel.load_state_dict(reference.state_dict())
+    batch = {key: value.cuda() for key, value in random_batch(height=36, width=28).items()}
+    with torch.no_grad():
+        torch.testing.assert_close(kernel(batch), reference(batch), rtol=1e-4, atol=1e-4)

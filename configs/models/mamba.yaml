@@ -1,0 +1,20 @@
+# VMamba-style state-space model on the time-stacked input: patch-4 tokens, VSS blocks with a
+# 2D selective scan in four directions, pixel-shuffle head with a full-resolution refinement.
+model:
+  name: mamba
+  dim: 160
+  depth: 9
+  patch_size: 4
+  d_state: 16
+  expand: 2
+  mlp_ratio: 4.0
+  skip_channels: 32
+  backend: auto             # mamba_ssm (CUDA kernel) on Linux GPUs, else mambapy; recorded per run
+  grad_checkpointing: false
+
+train:
+  amp: bf16
+
+tuning:                     # (dim, depth); every option stays within 5M +/- 20%
+  knob: [dim, depth]
+  options: [[192, 6], [160, 9], [128, 14]]

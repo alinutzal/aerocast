@@ -12,3 +12,4 @@ One line per run, written by aerocast-evaluate.
 | 2026-09-28 | 20260928-150200_smoke-swin_8572 | swin | ox | 42 | c300db0f7a | – | – | smoke_test Ox RMSE 1.300 (in-sample); swin smoke, ox |
 | 2026-09-28 | 20260928-150326_smoke-swin_unet_472e | swin_unet | ox | 42 | 24cf249d62 | – | – | smoke_test Ox RMSE 1.909 (in-sample); swin_unet smoke, ox |
 | 2026-09-28 | 20260928-150946_smoke-gnn_e784 | gnn | ox | 42 | 3cb2c059bf | – | – | smoke_test Ox RMSE 1.747 (in-sample); GNN smoke, ox |
+| 2026-09-28 | 20260928-151841_smoke-mamba_f56f | mamba | ox | 42 | 8370e75848 | – | – | smoke_test Ox RMSE 1.046 (in-sample); Mamba smoke, ox (mamba_ssm kernel) |
