@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from aerocast.data import channel_layout
 from aerocast.models.convlstm import ConvLSTMCell, ConvLSTMForecaster, StackedConvLSTM
+from aerocast.models.unet import UNet
 from aerocast.targets import target_channels
 
 
@@ -36,7 +37,7 @@ class ModelSpec:
                 + len(self.static_channels))
 
 
-REGISTRY = {"convlstm": ConvLSTMForecaster}
+REGISTRY = {"convlstm": ConvLSTMForecaster, "unet": UNet}
 
 
 def model_spec(cfg):
@@ -58,5 +59,5 @@ def count_parameters(model):
     return sum(p.numel() * (2 if p.is_complex() else 1) for p in model.parameters() if p.requires_grad)
 
 
-__all__ = ["ConvLSTMCell", "ConvLSTMForecaster", "ModelSpec", "REGISTRY", "StackedConvLSTM",
+__all__ = ["ConvLSTMCell", "ConvLSTMForecaster", "ModelSpec", "REGISTRY", "StackedConvLSTM", "UNet",
            "build_model", "count_parameters", "model_spec"]

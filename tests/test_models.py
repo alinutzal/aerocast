@@ -18,6 +18,7 @@ T_IN, T_OUT = 6, 10
 # Same architectures as configs/models/*.yaml, with fewer channels.
 SMALL = {
     "convlstm": {"hidden_dims": [16, 8], "kernel_size": 3, "norm": "group", "num_groups": 4},
+    "unet": {"width": 8, "levels": 4, "norm_groups": 4},
 }
 MODELS = sorted(SMALL)
 
