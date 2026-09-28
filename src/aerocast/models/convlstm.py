@@ -50,8 +50,10 @@ class StackedConvLSTM(nn.Module):
 
         self.out_conv = nn.Conv2d(hidden_dims[1], 1, kernel_size=1)
 
-    def forward(self, x, pred_steps=1):
+    def forward(self, x, pred_steps=1, future_x=None):
         # x: (B, T, C, H, W) - process all T time steps
+        # future_x: optional (B, pred_steps - 1, C, H, W) frames fed during the rollout
+        #           (features.future_forcings); None reuses the last input frame
         if x.dim() == 5:
             B, T, C, H, W = x.shape
         else:
@@ -85,8 +87,9 @@ class StackedConvLSTM(nn.Module):
             predictions.append(out.squeeze(1))  # (B, H, W)
             
             if step < pred_steps - 1:  # Don't update for last step
-                # Continue evolving hidden states using last input
-                h1, c1 = self.cell1(x_last, h1, c1)
+                # Continue evolving hidden states using last input (or the next future frame)
+                x_next = x_last if future_x is None else future_x[:, step]
+                h1, c1 = self.cell1(x_next, h1, c1)
                 h1_bn = self.bn1(h1)
                 h2, c2 = self.cell2(h1_bn, h2, c2)
                 h2 = self.bn2(h2)
