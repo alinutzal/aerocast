@@ -1,0 +1,10 @@
+base: default.yaml
+
+data:
+  normalization_mode: predictors
+
+train:
+  checkpoint: checkpoints/norm_predictors.pt
+
+eval:
+  output_dir: results_pred

@@ -1,0 +1,10 @@
+base: default.yaml
+
+data:
+  normalization_mode: none
+
+train:
+  checkpoint: checkpoints/norm_none.pt
+
+eval:
+  output_dir: results_no
