@@ -11,7 +11,7 @@ climatology) scored on the same windows as the model.
 
 ```bash
 uv sync                                   # installs aerocast (editable) + pytest
-uv run pytest                             # synthetic-data tests, ~15 s on CPU
+uv run pytest                             # synthetic-data tests, ~15 s on CPU (see Testing)
 
 # Single-day smoke test on the real data (GPU recommended)
 uv run aerocast-train --config configs/smoke.yaml
@@ -148,6 +148,57 @@ run_id, model, split, lead_hour, metric, value, config_hash, git_commit
 `split` is `val`/`test` in `dates` mode, otherwise `smoke_test` or `legacy`. `config_hash`
 identifies the experiment settings (it ignores the run name, output paths and logging).
 `git_commit` gets a `-dirty` suffix when tracked files had uncommitted changes.
+
+## Testing
+
+There are three levels, fastest first. Run them from the repo root.
+
+**1. Unit tests** (CPU, about 15 s; fine on a login node):
+
+```bash
+uv run pytest                 # expect "19 passed"
+uv run pytest -v -k splits    # one group: splits, normalize, baselines or pipeline
+```
+
+The tests write three synthetic days with `scripts/make_synthetic_data.py` and check that:
+
+- no window crosses a split boundary or a missing day, and the conc time offset aligns the files
+- normalization stats don't change when val/test values change, and match the legacy formula
+- persistence equals the t−1 field at every lead hour
+- climatology uses training days only
+- both feature flags train and evaluate, and future frames carry the forecast hour's forcings
+- a fixed seed repeats training exactly
+- a 2-epoch train + evaluate run writes `results.csv`, and concurrent appends keep one header
+
+**2. End to end with a train/val/test split, on synthetic data** (CPU, under a minute). Until
+more days of real data arrive, this is the only way to run `dates` mode:
+
+```bash
+uv run python scripts/make_synthetic_data.py --out-dir /tmp/aerocast-synth --days 3
+uv run aerocast-train --config configs/base.yaml \
+  --set data.data_dir=/tmp/aerocast-synth --set data.cache_dir=/tmp/aerocast-synth/cache \
+  --set 'split.train=["2018-11-13","2018-11-13"]' \
+  --set 'split.val=["2018-11-14","2018-11-14"]' \
+  --set 'split.test=["2018-11-15","2018-11-15"]' \
+  --set train.epochs=2 \
+  --set output.runs_dir=/tmp/aerocast-synth/runs --set output.results_csv=/tmp/aerocast-synth/results.csv
+```
+
+Expect separate `val` and `test` tables, with non-zero climatology. The ConvLSTM scores poorly
+after two epochs; this run only checks that everything connects.
+
+**3. Real data** (GPU):
+
+```bash
+salloc -C gpu -t 1:00:00 -c 4 -A <project> --gpus=1
+uv run aerocast-train --config configs/smoke.yaml    # about 40 s on an A100
+```
+
+On an A100 with seed 42 this gave ConvLSTM RMSE 3.63, persistence 5.97 and climatology 0.00 ppbV
+(in-sample; see [What the single-day numbers mean](#what-the-single-day-numbers-mean)). The table
+is also saved to `runs/<run_id>/summary.txt`. To try the feature flags, add
+`--set features.include_o3_input=true --set features.future_forcings=true`. To compare against
+the legacy script, see the next section.
 
 ## Refactor check
 
