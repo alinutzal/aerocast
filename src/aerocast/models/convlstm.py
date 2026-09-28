@@ -39,16 +39,22 @@ class ConvLSTMCell(nn.Module):
         return h, c
 
 class StackedConvLSTM(nn.Module):
-    def __init__(self, input_channels, hidden_dims=[64, 32], kernel_size=3, out_channels=1):
+    def __init__(self, input_channels, hidden_dims=[64, 32], kernel_size=3, out_channels=1, norm="batch", num_groups=8):
         super().__init__()
         self.hidden_dims = hidden_dims
         self.grad_checkpointing = False  # recompute each time step in backward to save memory
 
-        self.cell1 = ConvLSTMCell(input_channels, hidden_dims[0], kernel_size)
-        self.bn1 = nn.BatchNorm2d(hidden_dims[0])
+        # norm="batch" is the legacy model. In train mode its BatchNorm before the output conv
+        # fixes each step's batch-and-grid mean output to the conv bias, so it cannot follow the
+        # diurnal change in domain-mean Ox across lead hours; norm="group" has no such coupling.
+        def hidden_norm(channels):
+            return nn.BatchNorm2d(channels) if norm == "batch" else nn.GroupNorm(num_groups, channels)
 
-        self.cell2 = ConvLSTMCell(hidden_dims[0], hidden_dims[1], kernel_size)
-        self.bn2 = nn.BatchNorm2d(hidden_dims[1])
+        self.cell1 = ConvLSTMCell(input_channels, hidden_dims[0], kernel_size, norm_type=norm, num_groups=num_groups)
+        self.bn1 = hidden_norm(hidden_dims[0])
+
+        self.cell2 = ConvLSTMCell(hidden_dims[0], hidden_dims[1], kernel_size, norm_type=norm, num_groups=num_groups)
+        self.bn2 = hidden_norm(hidden_dims[1])
 
         self.out_conv = nn.Conv2d(hidden_dims[1], out_channels, kernel_size=1)
 
@@ -114,10 +120,11 @@ class ConvLSTMForecaster(nn.Module):
     input hour (the model never sees future concentrations).
     """
 
-    def __init__(self, spec, hidden_dims=(64, 32), kernel_size=3, grad_checkpointing=False):
+    def __init__(self, spec, hidden_dims=(64, 32), kernel_size=3, norm="batch", num_groups=8, grad_checkpointing=False):
         super().__init__()
         self.spec = spec
-        self.net = StackedConvLSTM(spec.frame_channels, list(hidden_dims), kernel_size, out_channels=spec.k)
+        self.net = StackedConvLSTM(spec.frame_channels, list(hidden_dims), kernel_size, out_channels=spec.k,
+                                   norm=norm, num_groups=num_groups)
         self.net.grad_checkpointing = grad_checkpointing
 
     def forward(self, batch):
