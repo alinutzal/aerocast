@@ -1,0 +1,13 @@
+# Blocked CV fold 3/4 (see configs/data/README_cv_folds.md for the full layout).
+# train = Jul 1-15, buffer = Jul 16, test = Jul 17-23, buffer = Jul 24, val = Jul 25-29,
+# buffer = Jul 30, train = Jul 31.
+base: equates_2019_07_ca12km.yaml
+
+split:
+  mode: dates
+  train: [["2019-07-01", "2019-07-15"], ["2019-07-31", "2019-07-31"]]
+  val: ["2019-07-25", "2019-07-29"]
+  test: ["2019-07-17", "2019-07-23"]
+
+output:
+  note: "blocked CV fold 3/4 (test 07-17..07-23)"
