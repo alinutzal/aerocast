@@ -89,6 +89,6 @@ output:
   note: ""                  # free text for EXPERIMENTS.md (aerocast-train --note)
 
 logging:
-  wandb: false
+  wandb: true
   wandb_project: aerocast
   wandb_entity: null

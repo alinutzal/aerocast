@@ -1,0 +1,8 @@
+model,parameters,amp,grad_checkpointing,backend,gpu,grid,batch_size,peak_train_memory_gb,train_seconds_per_step,train_windows,train_seconds_per_epoch,inference_ms_mean,inference_ms_std,cmaq_wallclock_seconds
+convlstm,4813721,bf16,True,,NVIDIA A100-PCIE-40GB,72x72,4,1.57,0.2054,354,18.277,27.63,0.03,
+unet,4824726,bf16,False,,NVIDIA A100-PCIE-40GB,72x72,4,0.2,0.0102,354,0.908,3.11,0.01,
+fno,4792010,none,False,,NVIDIA A100-PCIE-40GB,72x72,4,0.36,0.0099,354,0.881,3.27,0.02,
+swin,5665012,bf16,False,,NVIDIA A100-PCIE-40GB,72x72,4,0.33,0.0512,354,4.557,18.03,0.09,
+swin_unet,4724162,bf16,False,,NVIDIA A100-PCIE-40GB,72x72,4,0.21,0.06,354,5.341,21.34,0.08,
+gnn,4948842,bf16,False,,NVIDIA A100-PCIE-40GB,72x72,4,2.27,0.0468,354,4.167,18.06,0.42,
+mamba,4665738,bf16,False,mamba_ssm,NVIDIA A100-PCIE-40GB,72x72,4,0.4,0.0478,354,4.252,14.67,0.08,
