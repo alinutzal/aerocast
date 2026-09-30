@@ -11,9 +11,10 @@
 export PYTHONUNBUFFERED=1   # stream print()s to the log immediately instead of buffering
 
 # Controlled 7-model benchmark (configs/experiments/benchmark_equates_fold{1,2,3,4}.yaml),
-# run per fold x model (28 tasks) so several GPUs can work in parallel instead of one GPU
-# doing it serially; the array's %4 cap above controls how many run at once. Each task runs
-# that model's tuning trials, then the final (target-mode x seed) runs, for one fold.
+# run per fold x model (24 tasks; ConvLSTM runs from benchmark_array_convlstm.sbatch) so
+# several GPUs can work in parallel instead of one GPU doing it serially; the array's %4 cap
+# above controls how many run at once. Each task runs that model's tuning trials, then the
+# final (target-mode x seed) runs, for one fold.
 # --model makes run_benchmark.py resumable per (fold, model), same as before.
 FOLDS=(1 2 3 4)
 MODELS=(unet fno swin swin_unet gnn mamba)   # convlstm excluded
