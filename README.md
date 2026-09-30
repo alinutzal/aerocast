@@ -15,7 +15,7 @@ fields out.
 
 ```bash
 uv sync                                                # installs aerocast (editable) + pytest
-uv run pytest                                          # synthetic-data tests, ~2 min on CPU
+uv run pytest                                          # synthetic-data tests, ~2 min (on a compute node)
 
 # One-day smoke test on the real data (GPU), any model from configs/models/
 uv run aerocast-train --config configs/smoke.yaml --model unet
@@ -28,6 +28,12 @@ uv run aerocast-evaluate runs/<run_id>
 uv run python scripts/run_benchmark.py --model unet    # resumable, one model at a time
 uv run python scripts/make_tables.py
 uv run python scripts/profile_models.py                # GPU cost of every model
+
+# The same benchmark on the EQUATES pilot, over 4 blocked-CV folds (see "Cross-validation")
+sbatch -A <account> scripts/benchmark_array.sbatch     # one task per fold x model, 6 models
+sbatch -A <account> scripts/benchmark_array_convlstm.sbatch   # ConvLSTM (slowest), one task per fold
+uv run python scripts/make_tables.py --cv --dataset equates_pilot --out results/benchmark_cv \
+    --reference gnn --profile results/profile_equates.csv
 ```
 
 Run commands from the repo root: data, cache and output paths in the configs are relative to it.
@@ -46,6 +52,8 @@ configs/
   legacy.yaml            Phase 1 inputs and ConvLSTM, for the refactor check
   models/<name>.yaml     one per model: architecture, AMP, checkpointing, tuning knob
   experiments/benchmark.yaml   models x target modes x seeds, budget, search space
+  experiments/benchmark_equates_fold{1..4}.yaml   the same benchmark on each pilot CV fold
+  data/equates_2019_07_ca12km[_fold{1..4}].yaml   EQUATES pilot, whole split and CV folds
 src/aerocast/
   config.py              YAML with `base:` inheritance, --model, --set overrides, config hash
   data.py                load days, align hours, derived channels, cache, windows
@@ -61,11 +69,16 @@ scripts/
   run_benchmark.py       tuning trials, selection, final runs (resumable)
   make_tables.py         Markdown/LaTeX tables and CSV figure data from results.csv
   profile_models.py      parameters, memory, training and inference time per model
-tests/                   pytest suite (synthetic data; two tests need a CUDA GPU)
+  summarize_equates_cv.py  per-fold and mean +/- spread of the pilot CV runs (ox mode)
+  plot_prediction_maps.py  forecast and error maps of every model on one CV fold
+  *.sbatch               Slurm jobs: benchmark (one config, or the pilot folds as arrays), profiling
+tests/                   pytest suite (synthetic data; the Mamba kernel test needs a CUDA GPU)
 legacy/grid_forcast.py   original script, unchanged
 EXPERIMENTS.md           one line per run, written by aerocast-evaluate
 results/results.csv      appended by every evaluation
+results/results_pilot.csv  the EQUATES pilot rows of results.csv (Git LFS)
 results/profile.csv      model cost on one GPU (CMAQ wall-clock column filled by hand)
+results/profile_equates.csv  the same on the 72x72 pilot grid
 datasets/, cache/, runs/ inputs, preprocessed arrays, run directories (gitignored)
 ```
 
@@ -229,12 +242,15 @@ target mode and the seed.
    learning rate (1e-4 to 3e-3) and weight decay (1e-6 to 1e-3) are drawn log-uniform, and trial
    *i* uses the same draw for every model. The model's knob is drawn from its three options.
 2. **Select:** the trial with the lowest validation Ox RMSE, written to
-   `results/benchmark_selection.json`.
+   `results/benchmark_selection.json` (`benchmark_selection_<config stem>.json` for any other
+   experiment config, so the CV folds keep separate files).
 3. **Final:** the selected config × 3 target modes × 3 seeds, validation and test.
 
 `scripts/run_benchmark.py` is resumable: runs whose config hash already has its rows are skipped.
 `--model NAME` runs one model and `--dry-run` lists what would run. It checks the parameter
-budget before every run and refuses anything but a `dates` split.
+budget before every run and refuses anything but a `dates` split. Run names start with the
+experiment config's stem (e.g. `benchmark_equates_fold3-final-gnn-ox-s42`) unless it is
+`benchmark.yaml`.
 
 `scripts/make_tables.py` builds everything from test rows only; smoke-test rows are refused. It
 writes `results/benchmark/`:
@@ -242,22 +258,51 @@ writes `results/benchmark/`:
   - Ox RMSE, MAE, MB and r, each with a 95% CI (block bootstrap over test days, seed-averaged);
   - CSI (p95) and spectral ratio at leads 1/5/10;
   - parameters and inference time;
-  - the paired RMSE difference vs the U-Net of the same target mode, with its CI.
+  - the paired RMSE difference vs the `--reference` model (default U-Net) of the same target
+    mode, with its CI.
 - `lead_rmse.md`/`.tex`: Ox RMSE by lead hour.
 - `figures/`: CSV data for Prism (lead-time curves with CIs, spectra, truth/forecast/error maps
   of the highest-Ox test window) and quick PNG previews.
 
+`--dataset NAME` keeps only that dataset's rows, and `--profile` picks the timing file.
+
 `scripts/profile_models.py` measures each model on one GPU and writes `results/profile.csv`:
 parameters, peak training memory, time per training step and epoch, and inference time for one
 10-hour forecast on the full grid (batch 1, 50 runs after warm-up). Fill in the CMAQ wall-clock
-column by hand; reruns keep it.
+column by hand; reruns keep it. Timings depend on the grid, so profile each dataset into its own
+file: `scripts/profile_equates.sbatch` writes the 72x72 pilot grid to
+`results/profile_equates.csv`. Reruns replace the rows of every model they profile.
+
+### Cross-validation on the EQUATES pilot
+
+`configs/experiments/benchmark_equates_fold{1..4}.yaml` run the benchmark above on each of the
+pilot's 4 blocked-CV folds. Each fold holds out a different week of July as `test`
+(`configs/data/README_cv_folds.md` has the day blocks). Tuning and selection are done per fold.
+
+- `make_tables.py --cv` pools each seed's 4 folds into one out-of-fold test set (the test weeks
+  are disjoint). Scores, CIs and the paired difference are computed over the union of test days,
+  using only folds that every seed of a model has.
+- `scripts/summarize_equates_cv.py` gives per-fold and mean +/- spread Ox RMSE in `ox` mode, to
+  separate weather-regime variation from seed variation (`--run-date YYYYMMDD` keeps one pass).
+- `scripts/plot_prediction_maps.py` draws truth, the baselines and every model on the highest-Ox
+  test window of one fold (`--fold`, `--mode`, `--seed`), with error maps.
+
+The Slurm scripts have no `--account` line: pass it with `sbatch -A <account>`, and submit
+from the repo root.
+
+`results/results_pilot.csv` holds the pilot rows of `results.csv` and is stored with Git LFS, so
+install `git-lfs` before cloning to get the file rather than a pointer.
 
 ## Testing
 
 ```bash
-uv run pytest                     # 114 tests on CPU (~2 min); 2 more run only on a CUDA GPU
+uv run pytest                     # 126 tests, ~2 min on a GPU node; the Mamba kernel test needs CUDA
 uv run pytest -k "models and unet"
+uv run pytest -m "not slow"       # skip the test that reads the extracted pilot data
 ```
+
+Run the suite on a compute node (`salloc`, see Quick start); on a login node it stalls in
+the first test.
 
 The tests run on synthetic days from `scripts/make_synthetic_data.py`, which uses the real files'
 variables, dims, units and time stamps. They cover:
@@ -286,7 +331,7 @@ variables, dims, units and time stamps. They cover:
 2018-11-13. In Phase 1 the pipeline in this mode gave per-window RMSE of 3.60 ppbV on average over
 windows 0–7, against 3.56 for a fresh run of `legacy/grid_forcast.py`, with no window differing by
 more than 0.23. The legacy script's own run-to-run spread is about 1 ppbV. To rerun the old script
-without touching the committed `results/*.png`:
+in its own directory, away from `results/`:
 
 ```bash
 mkdir -p runs/legacy_script && ln -s ../../datasets runs/legacy_script/datasets
