@@ -18,6 +18,7 @@ be restarted, and --model runs one model at a time.
 import argparse
 import copy
 import csv
+import fcntl
 import gc
 import json
 import zlib
@@ -64,12 +65,21 @@ class Benchmark:
             raise SystemExit(f"The benchmark needs split.mode: dates (got {cfg['split']['mode']!r}); "
                              "smoke-test runs never feed benchmark tables.")
         self.results_csv = Path(cfg["output"]["results_csv"])
-        self.selection_path = self.results_csv.parent / "benchmark_selection.json"
+        # Namespaced by config stem so configs that share one results_csv (e.g. the CV
+        # fold configs, all pointed at the same results/results.csv) get separate selection
+        # files instead of clobbering each other's entries.
+        stem = Path(path).stem
+        name = "benchmark_selection.json" if stem == "benchmark" else f"benchmark_selection_{stem}.json"
+        self.selection_path = self.results_csv.parent / name
 
     def config(self, model, name, target_mode, seed, lr, weight_decay, setting, note):
         cfg = load_config(self.path, self.overrides, model=model)
         cfg.pop("benchmark")
-        cfg["name"] = name
+        # Prefixed by the experiment config's own stem (unless it's the plain default) so
+        # run_id/EXPERIMENTS.md keep saying which config produced a run - e.g. which CV fold,
+        # for configs/experiments/benchmark_equates_fold*.yaml.
+        stem = Path(self.path).stem
+        cfg["name"] = name if stem == "benchmark" else f"{stem}-{name}"
         cfg["target_mode"], cfg["seed"] = target_mode, seed
         cfg["train"]["lr"], cfg["train"]["weight_decay"] = lr, weight_decay
         cfg["train"]["epochs"], cfg["train"]["patience"] = self.budget  # model files cannot change the budget
@@ -129,7 +139,7 @@ class Benchmark:
 
     def select(self, models):
         rows = self.results()
-        selection = json.loads(self.selection_path.read_text()) if self.selection_path.exists() else {}
+        selection = {}
         for model in models:
             scored = []
             for run in self.tuning_runs(model):
@@ -144,9 +154,19 @@ class Benchmark:
                                 "setting": best["setting"], "val_ox_rmse": rmse, "config_hash": config_hash(best["cfg"]),
                                 "trials": {str(run["trial"]): value for value, run in scored}}
             print(f"== {model}: trial {best['trial']} selected (val Ox RMSE {rmse:.3f}; {best['setting']})")
+        # Read-modify-write under an exclusive lock: several models (or, across fold configs,
+        # several Benchmark instances sharing one results_csv) can call select() concurrently,
+        # each computing only its own models' entries but merging into the same file.
         self.selection_path.parent.mkdir(parents=True, exist_ok=True)
-        self.selection_path.write_text(json.dumps(selection, indent=2) + "\n")
-        return selection
+        with open(self.selection_path, "a+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            existing = json.loads(f.read() or "{}")
+            existing.update(selection)
+            f.seek(0)
+            f.truncate()
+            f.write(json.dumps(existing, indent=2) + "\n")
+        return existing
 
     def final(self, models, dry_run):
         selection = self.select(models)

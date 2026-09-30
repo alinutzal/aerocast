@@ -1,0 +1,27 @@
+# Controlled benchmark on EQUATES pilot blocked-CV fold 2/4 (test = Jul 9-15; see
+# configs/data/README_cv_folds.md). Same sweep as benchmark.yaml - model, target mode and
+# seed are the only things that change between runs - just pointed at this fold's split.
+# Run all four folds (benchmark_equates_fold{1,2,3,4}.yaml) and aggregate with
+# scripts/summarize_equates_cv.py for a mean +/- spread over weather regimes.
+#
+#   uv run python scripts/run_benchmark.py --config configs/experiments/benchmark_equates_fold2.yaml
+base: ../data/equates_2019_07_ca12km_fold2.yaml
+
+# Same budget for every model.
+train:
+  epochs: 150
+  patience: 20
+
+benchmark:
+  models: [convlstm, unet, fno, swin, swin_unet, gnn, mamba]
+  target_modes: [ox, species, multitask]
+  seeds: [42, 43, 44]                   # matches the seeds already used for the per-model CV runs
+  parameter_budget: [4.0e+6, 6.0e+6]   # 5M +/- 20%, checked before every run
+  model_overrides:
+    mamba: {backend: mamba_ssm}         # all Mamba numbers from the CUDA kernel
+  tuning:                               # ox mode, validation Ox RMSE decides
+    trials: 8
+    seed: 0                             # trial i uses the same lr and weight decay for every model
+    target_mode: ox
+    lr: [1.0e-4, 3.0e-3]                # log-uniform
+    weight_decay: [1.0e-6, 1.0e-3]      # log-uniform
