@@ -38,7 +38,7 @@ RUN_RE = re.compile(
     r"equates_2019_07_ca12km_fold(?P<fold_old>\d)-[a-z_]+_"
     r"|benchmark_equates_fold(?P<fold_new>\d)-final-[a-z_]+-(?P<mode_new>ox|species|multitask)-s\d+_"
 )
-MODELS = ["convlstm", "unet", "fno", "swin", "swin_unet", "gnn", "mamba"]
+MODELS = ["convlstm", "unet", "fno", "swin", "swin_unet", "gnn", "mamba", "upt"]
 METRICS = ["rmse", "mae", "bias", "pearson_r"]  # unprefixed = Ox, scored for every target mode
 
 

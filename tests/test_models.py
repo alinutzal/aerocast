@@ -23,6 +23,7 @@ SMALL = {
     "swin": {"feature_size": 12, "depths": [2, 2, 2, 1], "window_size": 7, "mlp_ratio": 2.0},
     "swin_unet": {"embed_dim": 16, "depths": [2, 2, 2], "num_heads": [2, 4, 8], "window_size": 7},
     "gnn": {"latent": 32, "processor_steps": 2},
+    "upt": {"dim": 16, "depth": 2, "dec_depth": 1, "num_heads": 2, "stride": 2, "radius": 1},
     "mamba": {"dim": 16, "depth": 2, "d_state": 4, "skip_channels": 8, "backend": "mambapy"},
 }
 MODELS = sorted(SMALL)

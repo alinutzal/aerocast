@@ -39,7 +39,7 @@ BASELINES = ("persistence", "climatology")
 MODES = ("ox", "species", "multitask")
 CI_METRICS = ("rmse", "mae", "bias", "pearson_r")
 LABELS = {"convlstm": "ConvLSTM", "unet": "U-Net", "fno": "FNO", "swin": "SwinUNETR", "swin_unet": "Swin U-Net",
-          "gnn": "GNN", "mamba": "Mamba", "persistence": "Persistence", "climatology": "Climatology"}
+          "gnn": "GNN", "mamba": "Mamba", "upt": "UPT", "persistence": "Persistence", "climatology": "Climatology"}
 
 
 def read_csv(path):
@@ -403,7 +403,7 @@ def main(argv=None):
     parser.add_argument("--runs-dir", default="runs")
     parser.add_argument("--profile", default="results/profile.csv")
     parser.add_argument("--out", default="results/benchmark")
-    parser.add_argument("--order", nargs="+", default=["unet", "convlstm", "fno", "swin", "swin_unet", "gnn", "mamba"])
+    parser.add_argument("--order", nargs="+", default=["unet", "convlstm", "fno", "swin", "swin_unet", "gnn", "mamba", "upt"])
     parser.add_argument("--bootstrap-samples", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--no-previews", action="store_true")
