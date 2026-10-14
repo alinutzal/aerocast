@@ -291,6 +291,11 @@ pilot's 4 blocked-CV folds. Each fold holds out a different week of July as `tes
 The Slurm scripts have no `--account` line: pass it with `sbatch -A <account>`, and submit
 from the repo root.
 
+To reproduce the pilot CV tables and check their uncertainty, see
+[docs/REPRODUCE.md](docs/REPRODUCE.md). Use the per-fold paired check
+(`scripts/fold_paired_check.py`) for claims about a difference between two models, since
+the day-block CI in `main.md` is narrower than the fold-to-fold spread.
+
 `results/results_pilot.csv` holds the pilot rows of `results.csv` and is stored with Git LFS, so
 install `git-lfs` before cloning to get the file rather than a pointer.
 
@@ -379,7 +384,6 @@ without them:
 - `AEROCAST_EQUATES_DIR`: the EQUATES data directory, e.g. `/fs/ess/<project>/data/aerocast_equates`.
 Configs read their storage paths as `${AEROCAST_EQUATES_DIR}/...`; `${NAME}` in any config value
 expands to that environment variable.
-
 Code and the Python environment remain in home. Submit from the repository root.
 
 Active runs, best checkpoints, metrics, selection JSON, experiment records, and W&B
