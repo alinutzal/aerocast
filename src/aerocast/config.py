@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import yaml
@@ -67,6 +68,22 @@ def load_config(path, overrides=None, model=None):
         if not sep:
             raise ValueError(f"Override '{item}' must look like section.key=value")
         set_dotted(cfg, key.strip(), yaml.safe_load(raw))
+    # Job staging is applied after user overrides. Preserve scientific identity across
+    # scratch/TMPDIR locations and retain original paths for later evaluation.
+    if os.environ.get("AEROCAST_DATA_DIR"):
+        original = cfg.setdefault("_storage_original", {
+            key: cfg["data"].get(key) for key in ("data_dir", "cache_dir", "static_file")
+        })
+        cfg["data"]["data_dir"] = os.environ["AEROCAST_DATA_DIR"]
+        cfg["data"]["cache_dir"] = os.environ["AEROCAST_CACHE_DIR"]
+        if original.get("static_file") and Path(original["static_file"]).is_absolute():
+            cfg["data"]["static_file"] = str(Path(os.environ["AEROCAST_DATA_DIR"]) / Path(original["static_file"]).name)
+        root = Path(os.environ["AEROCAST_OUTPUT_DIR"])
+        cfg["output"].update(runs_dir=str(root / "runs"),
+                             results_csv=str(root / "results/results.csv"),
+                             experiments_md=str(root / "EXPERIMENTS.md"))
+    elif "_storage_original" in cfg:
+        cfg["data"].update(cfg["_storage_original"])
     # Round-trip through JSON so dates parsed by YAML become plain strings.
     return json.loads(json.dumps(cfg, default=str))
 
@@ -78,5 +95,13 @@ def save_config(cfg, path):
 
 def config_hash(cfg):
     """Short hash of the experiment settings (ignores run name, output paths and logging)."""
+    cfg = copy.deepcopy(cfg)
+    original = cfg.pop("_storage_original", None)
+    if original:
+        for key, value in original.items():
+            if value is None:
+                cfg["data"].pop(key, None)
+            else:
+                cfg["data"][key] = value
     settings = {k: v for k, v in cfg.items() if k not in _UNHASHED}
     return hashlib.sha1(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:10]

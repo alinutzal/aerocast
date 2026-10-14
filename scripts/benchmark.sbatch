@@ -7,6 +7,8 @@
 #SBATCH --time=7-00:00:00        # nextgen's max
 #SBATCH --output=logs/%x-%j.out
 
+set -euo pipefail
+
 export PYTHONUNBUFFERED=1   # stream print()s to the log immediately instead of buffering
 
 cd "$SLURM_SUBMIT_DIR"   # submit from the repo root
@@ -20,4 +22,16 @@ case " $* " in
      exit 1 ;;
 esac
 
-uv run python scripts/run_benchmark.py "$@"
+config=""
+models=()
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+  case "${args[i]}" in
+    --config) config="${args[i+1]}" ;;
+    --model) models+=("${args[i+1]}") ;;
+  esac
+done
+scope="$(basename "${config%.yaml}")-${models[*]:-all}"
+scope="${scope// /_}"
+uv run python scripts/job_storage.py --config "$config" --scope "$scope" -- \
+  python scripts/run_benchmark.py "$@"

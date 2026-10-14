@@ -8,6 +8,8 @@
 #SBATCH --array=0-3               # 4 folds, convlstm only
 #SBATCH --output=logs/%x-%a.out
 
+set -euo pipefail
+
 export PYTHONUNBUFFERED=1   # stream print()s to the log immediately instead of buffering
 
 # ConvLSTM only, run separately from scripts/benchmark_array.sbatch's other 6 models - one
@@ -17,6 +19,10 @@ FOLDS=(1 2 3 4)
 fold=${FOLDS[$SLURM_ARRAY_TASK_ID]}
 
 cd "$SLURM_SUBMIT_DIR"   # submit from the repo root
-uv run python scripts/run_benchmark.py \
+model=convlstm
+uv run python scripts/job_storage.py \
+  --config "configs/experiments/benchmark_equates_fold${fold}.yaml" \
+  --scope "benchmark_equates_fold${fold}-${model}" -- \
+  python scripts/run_benchmark.py \
   --config "configs/experiments/benchmark_equates_fold${fold}.yaml" \
   --model convlstm

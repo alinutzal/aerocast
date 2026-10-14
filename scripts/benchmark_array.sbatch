@@ -8,6 +8,8 @@
 #SBATCH --array=0-23%4            # 4 folds x 6 models (convlstm excluded); %4 caps it at 4 GPUs running at once
 #SBATCH --output=logs/%x-%a.out
 
+set -euo pipefail
+
 export PYTHONUNBUFFERED=1   # stream print()s to the log immediately instead of buffering
 
 # Controlled 7-model benchmark (configs/experiments/benchmark_equates_fold{1,2,3,4}.yaml),
@@ -23,6 +25,9 @@ fold=${FOLDS[$(( SLURM_ARRAY_TASK_ID / n_models ))]}
 model=${MODELS[$(( SLURM_ARRAY_TASK_ID % n_models ))]}
 
 cd "$SLURM_SUBMIT_DIR"   # submit from the repo root
-uv run python scripts/run_benchmark.py \
+uv run python scripts/job_storage.py \
+  --config "configs/experiments/benchmark_equates_fold${fold}.yaml" \
+  --scope "benchmark_equates_fold${fold}-${model}" -- \
+  python scripts/run_benchmark.py \
   --config "configs/experiments/benchmark_equates_fold${fold}.yaml" \
   --model "$model"

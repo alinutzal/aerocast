@@ -360,3 +360,30 @@ If you use this code in your research, please cite:
 ## Contact
 
 [Add contact information]
+
+### OSC job storage
+
+The four `scripts/*.sbatch` jobs use `scripts/job_storage.py` to stage the configured
+input directory from project storage to a working copy on scratch. Single-node jobs
+copy that working data to `$TMPDIR` when free space exceeds twice the data size plus
+existing cache size and 2 GiB of headroom; otherwise they read scratch. Cache writes
+also use local storage when selected. This capacity estimate is conservative but cannot
+predict every preprocessing workload; request sufficient local storage for your dataset.
+
+Defaults are `/fs/scratch/PLS0144/$USER/AeroCast` for working storage and
+`/fs/ess/PLS0144/AeroCast` for permanent storage. Override them at submission with
+`AEROCAST_SCRATCH_ROOT` and `AEROCAST_PROJECT_ROOT` (export both before `sbatch`).
+Code and the Python environment remain in home. Submit from the repository root.
+
+Active runs, best checkpoints, metrics, selection JSON, experiment records, and W&B
+files go under `outputs/<scope>/` on scratch. On normal exit, including Python failure
+or a handled termination signal, these are copied to project `results/<scope>/`.
+A hard kill or wall-time exhaustion can prevent archival: recover the retained scratch
+outputs manually in that case. Scheduler stdout still uses the existing `logs/` path.
+Array scopes are separate fold/model directories; duplicate jobs for one scope fail
+rather than race. Re-submission restores archived outputs and existing repository
+metrics seed the first run. Aggregation scripts must be pointed at the per-scope CSVs;
+these jobs no longer append to the repository's shared `results/results.csv`.
+
+Saved configurations retain source data paths for later evaluation, and staging paths
+do not change configuration hashes. Caches are regenerable and are not archived.
