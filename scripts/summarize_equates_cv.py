@@ -2,23 +2,22 @@
 mode) into mean +/- spread per model, plus a per-fold breakdown to see weather-regime
 variation separately from seed variation.
 
-Rows come from two naming schemes, both matched: convlstm/unet/fno's first CV pass was run
-directly with `aerocast-train --config configs/data/equates_2019_07_ca12km_fold{N}.yaml`
-(run_id contains "equates_2019_07_ca12km_fold{N}-{model}_"); the full 7-model sweep is run
-with `scripts/run_benchmark.py --config configs/experiments/benchmark_equates_fold{N}.yaml`
-(run_id contains "benchmark_equates_fold{N}-final-{model}-{mode}-s{seed}_"). Only the ox mode
+Rows come from two naming schemes. By default only the 7-model benchmark is used: its final
+runs, from `scripts/run_benchmark.py --config configs/experiments/benchmark_equates_fold{N}.yaml`
+(run_id contains "benchmark_equates_fold{N}-final-{model}-{mode}-s{seed}_"), the same runs
+scripts/make_tables.py --cv reports. `--first-pass` uses instead convlstm/unet/fno's first CV
+pass, run directly with `aerocast-train --config configs/data/equates_2019_07_ca12km_fold{N}.yaml`
+(run_id contains "equates_2019_07_ca12km_fold{N}-{model}_"), tuned differently - mixing the
+two would count a model's seeds twice. Only the ox mode
 is aggregated here - species/multitask are 3 more comparable numbers per model, not more
 weather regimes, and mixing them into this fold/seed spread would conflate the two. The full
 per-mode tables come from scripts/make_tables.py.
 
-Usage: python scripts/summarize_equates_cv.py
+Usage: python scripts/summarize_equates_cv.py                 # benchmark final runs
+       python scripts/summarize_equates_cv.py --first-pass    # the first aerocast-train pass
        python scripts/summarize_equates_cv.py --run-date 20260929   # only that day's run_ids
                                                                      # (run_id is timestamped
-                                                                     # YYYYMMDD-HHMMSS_...) -
-                                                                     # use this to exclude an
-                                                                     # earlier, differently-
-                                                                     # tuned CV pass for the
-                                                                     # same model/fold.
+                                                                     # YYYYMMDD-HHMMSS_...)
 """
 import argparse
 import csv
@@ -43,19 +42,20 @@ MODELS = ["convlstm", "unet", "fno", "swin", "swin_unet", "gnn", "mamba"]
 METRICS = ["rmse", "mae", "bias", "pearson_r"]  # unprefixed = Ox, scored for every target mode
 
 
-def parse_run(run_id):
-    """(fold, mode) from a run_id matching either naming scheme, or None if it matches neither."""
+def parse_run(run_id, first_pass=False):
+    """(fold, mode) from a run_id of the chosen naming scheme, or None if it is not one."""
     m = RUN_RE.search(run_id)
-    if not m:
+    if not m or bool(m.group("fold_old")) != first_pass:
         return None
     if m.group("fold_old"):
         return int(m.group("fold_old")), "ox"
     return int(m.group("fold_new")), m.group("mode_new")
 
 
-def load_cv_rows(run_date=None):
-    """{(model, fold): {metric: [values across seeds]}}, ox target mode only. run_date (a
-    "YYYYMMDD" prefix of run_id) restricts to runs started that day."""
+def load_cv_rows(run_date=None, first_pass=False):
+    """{(model, fold): {metric: [values across seeds]}}, ox target mode only, from the benchmark
+    final runs (first_pass: the first aerocast-train pass instead). run_date (a "YYYYMMDD"
+    prefix of run_id) restricts to runs started that day."""
     by_cell = defaultdict(lambda: defaultdict(list))
     with open(RESULTS, newline="") as f:
         for row in csv.DictReader(f):
@@ -65,7 +65,7 @@ def load_cv_rows(run_date=None):
                 continue
             if run_date and not row["run_id"].startswith(run_date):
                 continue
-            parsed = parse_run(row["run_id"])
+            parsed = parse_run(row["run_id"], first_pass)
             if not parsed or parsed[1] != "ox":
                 continue
             fold, _ = parsed
@@ -76,17 +76,20 @@ def load_cv_rows(run_date=None):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-date", default=None, help="only run_ids timestamped this day (YYYYMMDD)")
+    parser.add_argument("--first-pass", action="store_true",
+                        help="the first aerocast-train CV pass (convlstm/unet/fno) instead of the benchmark")
     args = parser.parse_args()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    by_cell = load_cv_rows(args.run_date)
+    by_cell = load_cv_rows(args.run_date, args.first_pass)
     models = [m for m in MODELS if any((m, fold) in by_cell for fold in range(1, 5))]
     if not models:
         scope = f" on {args.run_date}" if args.run_date else ""
         raise SystemExit(f"No blocked-CV rows found in {RESULTS}{scope} (ox mode, dataset equates_pilot).")
 
-    suffix = f"_{args.run_date}" if args.run_date else ""
-    scope_note = f", run_id timestamped {args.run_date} only" if args.run_date else ""
+    suffix = ("_first_pass" if args.first_pass else "") + (f"_{args.run_date}" if args.run_date else "")
+    scope_note = ", first aerocast-train pass" if args.first_pass else ", benchmark final runs"
+    scope_note += f", run_id timestamped {args.run_date} only" if args.run_date else ""
     report = [f"# EQUATES pilot: blocked cross-validation (4 folds x 3 seeds, ox target mode{scope_note})\n",
               "Each fold holds out a different week of July as `test` (with a 5-day `val` block "
               "and 1-day buffers separating train/val/test), so the number below is a mean +/- "

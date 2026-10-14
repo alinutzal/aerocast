@@ -1,4 +1,4 @@
-# EQUATES pilot: blocked cross-validation (4 folds x 3 seeds, ox target mode)
+# EQUATES pilot: blocked cross-validation (4 folds x 3 seeds, ox target mode, benchmark final runs)
 
 Each fold holds out a different week of July as `test` (with a 5-day `val` block and 1-day buffers separating train/val/test), so the number below is a mean +/- spread over four different weather regimes and three seeds (up to 12 runs per model), not one number from one episode. See configs/data/equates_2019_07_ca12km_fold{1..4}.yaml for the exact day blocks. Models with fewer than 4 folds present are still in progress.
 
@@ -6,9 +6,9 @@ Each fold holds out a different week of July as `test` (with a 5-day `val` block
 
 | model | fold 1 | fold 2 | fold 3 | fold 4 | mean of folds | fold std |
 |---|---|---|---|---|---|
-| convlstm | 2.743 | 4.025 | 3.285 | 4.707 | 3.690 | 0.743 |
-| unet | 2.764 | 3.583 | 3.460 | 4.559 | 3.592 | 0.640 |
-| fno | 2.998 | 4.049 | 3.644 | 4.906 | 3.900 | 0.692 |
+| convlstm | 2.742 | 3.973 | 3.342 | 4.481 | 3.635 | 0.654 |
+| unet | 2.782 | 3.597 | 3.471 | 4.572 | 3.605 | 0.638 |
+| fno | 2.984 | 3.926 | 3.535 | 4.555 | 3.750 | 0.573 |
 | swin | 3.106 | 4.847 | 3.558 | 5.423 | 4.234 | 0.938 |
 | swin_unet | 2.770 | 3.581 | 3.625 | 4.279 | 3.564 | 0.535 |
 | gnn | 2.775 | 3.421 | 3.078 | 3.757 | 3.258 | 0.368 |
@@ -18,9 +18,9 @@ Each fold holds out a different week of July as `test` (with a 5-day `val` block
 
 | model | mean | std | min | max | n |
 |---|---|---|---|---|---|
-| convlstm | 3.690 | 0.752 | 2.687 | 4.804 | 12 |
-| unet | 3.592 | 0.645 | 2.668 | 4.714 | 24 |
-| fno | 4.028 | 0.689 | 2.975 | 5.303 | 21 |
+| convlstm | 3.635 | 0.675 | 2.676 | 4.515 | 12 |
+| unet | 3.605 | 0.644 | 2.726 | 4.714 | 12 |
+| fno | 3.750 | 0.589 | 2.866 | 4.742 | 12 |
 | swin | 4.234 | 0.947 | 2.907 | 5.537 | 12 |
 | swin_unet | 3.564 | 0.537 | 2.738 | 4.324 | 12 |
 | gnn | 3.258 | 0.370 | 2.737 | 3.801 | 12 |
@@ -30,9 +30,9 @@ Each fold holds out a different week of July as `test` (with a 5-day `val` block
 
 | model | mean | std |
 |---|---|---|
-| convlstm | 2.745 | 0.629 |
-| unet | 2.655 | 0.544 |
-| fno | 2.912 | 0.545 |
+| convlstm | 2.680 | 0.555 |
+| unet | 2.674 | 0.552 |
+| fno | 2.706 | 0.467 |
 | swin | 3.274 | 0.799 |
 | swin_unet | 2.542 | 0.363 |
 | gnn | 2.286 | 0.239 |
@@ -42,9 +42,9 @@ Each fold holds out a different week of July as `test` (with a 5-day `val` block
 
 | model | mean | std |
 |---|---|---|
-| convlstm | -0.391 | 1.721 |
-| unet | -0.421 | 1.410 |
-| fno | -0.345 | 1.473 |
+| convlstm | -0.440 | 1.445 |
+| unet | -0.420 | 1.435 |
+| fno | -0.192 | 1.132 |
 | swin | -0.437 | 2.310 |
 | swin_unet | -0.125 | 0.580 |
 | gnn | -0.067 | 0.909 |
@@ -54,9 +54,9 @@ Each fold holds out a different week of July as `test` (with a 5-day `val` block
 
 | model | mean | std |
 |---|---|---|
-| convlstm | 0.949 | 0.009 |
+| convlstm | 0.948 | 0.009 |
 | unet | 0.946 | 0.009 |
-| fno | 0.932 | 0.014 |
+| fno | 0.936 | 0.013 |
 | swin | 0.937 | 0.016 |
 | swin_unet | 0.939 | 0.013 |
 | gnn | 0.952 | 0.007 |
