@@ -16,6 +16,13 @@ def sync(source, destination):
     subprocess.run(["rsync", "-a", str(source) + "/", str(destination) + "/"], check=True)
 
 
+def required_env(name):
+    value = os.environ.get(name)
+    if not value:
+        raise SystemExit(f"Set {name} before submitting (see README, OSC job storage).")
+    return value
+
+
 def size(path):
     # Apparent size accounts for sparse files as rsync copies them normally.
     return int(subprocess.check_output(["du", "-sb", str(path)], text=True).split()[0])
@@ -40,8 +47,8 @@ def main():
     source = Path(cfg["data"]["data_dir"]).resolve()
     if not source.is_dir():
         raise SystemExit(f"Missing source data: {source}")
-    scratch = Path(os.environ.get("AEROCAST_SCRATCH_ROOT", "/fs/scratch/PLS0144/" + os.environ["USER"] + "/AeroCast"))
-    project = Path(os.environ.get("AEROCAST_PROJECT_ROOT", "/fs/ess/PLS0144/AeroCast"))
+    scratch = Path(required_env("AEROCAST_SCRATCH_ROOT"))
+    project = Path(required_env("AEROCAST_PROJECT_ROOT"))
     dataset = hashlib.sha256(str(source).encode()).hexdigest()[:16]
     working = scratch / "data" / dataset
     working.parent.mkdir(parents=True, exist_ok=True)

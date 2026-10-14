@@ -77,3 +77,5 @@ htmlcov/
 Thumbs.db
 
 datasets/
+# Site-specific storage paths (not shared)
+osc_env.sh

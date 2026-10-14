@@ -11,6 +11,7 @@ grid's own Lambert Conformal projection with state lines and the 64x64 core box 
 """
 import argparse
 import json
+import os
 from pathlib import Path
 
 import matplotlib
@@ -22,7 +23,6 @@ import xarray as xr
 LABELS = {"convlstm": "ConvLSTM", "unet": "U-Net", "fno": "FNO", "swin": "SwinUNETR", "swin_unet": "Swin U-Net",
           "gnn": "GNN", "mamba": "Mamba", "upt": "UPT", "persistence": "Persistence", "climatology": "Climatology"}
 MODELS = ["gnn", "mamba", "swin_unet", "unet", "fno", "convlstm", "swin", "upt"]
-STATIC = "/fs/ess/PLS0144/data/aerocast_equates/pilot/files/static.nc"
 RING = 4  # boundary cells around the 64x64 core (configs/data/equates_2019_07_ca12km.yaml)
 
 
@@ -110,10 +110,16 @@ def main(argv=None):
     parser.add_argument("--models", nargs="+", default=MODELS)
     parser.add_argument("--baselines", nargs="*", default=["persistence", "climatology"])
     parser.add_argument("--runs-dir", default="runs")
-    parser.add_argument("--static", default=STATIC, help="NetCDF with LAT/LON on the model grid")
+    parser.add_argument("--static", default=None,
+                        help="NetCDF with LAT/LON on the model grid (default: $AEROCAST_EQUATES_DIR/pilot/files/static.nc)")
     parser.add_argument("--out", default="results/benchmark_cv/figures/maps")
     parser.add_argument("--no-borders", action="store_true", help="skip state lines (they need Natural Earth data)")
     args = parser.parse_args(argv)
+    if args.static is None:
+        root = os.environ.get("AEROCAST_EQUATES_DIR")
+        if not root:
+            raise SystemExit("Set AEROCAST_EQUATES_DIR (or pass --static) for the grid's static.nc.")
+        args.static = os.path.join(root, "pilot", "files", "static.nc")
 
     truth, panels, leads, window, unit = load_panels(args.runs_dir, args.fold, args.mode, args.seed,
                                                      args.models, args.baselines)

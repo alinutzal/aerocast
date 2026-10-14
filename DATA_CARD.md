@@ -5,7 +5,7 @@ layer, a 72x72 read area (a 64x64 core box plus a 4-cell boundary ring) on the C
 Lambert Conformal Conic grid, over the Bay Area, Sacramento Valley and San Joaquin Valley.
 Config: `configs/data/equates_2019_07_ca12km.yaml`. Extracted by
 `scripts/extract_equates_pilot.py`. Data lives outside the repo, on OSC project storage
-(`/fs/ess/PLS0144/data/aerocast_equates/pilot/files/`), not in git.
+(`$AEROCAST_EQUATES_DIR/pilot/files/`), not in git.
 
 **Output:** 31 days x 2 streams (`equates_conc_<date>.nc`, `equates_meteo_<date>.nc`) +
 `static.nc`, 63 files, 110 MB total (49 MB concentrations, 62 MB meteorology, 80 KB static;

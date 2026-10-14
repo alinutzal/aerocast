@@ -11,13 +11,15 @@ set -euo pipefail
 
 export PYTHONUNBUFFERED=1   # stream print()s to the log immediately instead of buffering
 
-# Profile all 7 models on the EQUATES pilot grid (72x72 read area, 12 km). Written to its own
+# Profile all models on the EQUATES pilot grid (72x72 read area, 12 km). Written to its own
 # file: results/profile.csv holds the 224x164 BAAQMD timings, and profile_models.py replaces the
-# rows of every model it profiles. Tables pick this up with
+# rows of every model it profiles. Extra arguments go to profile_models.py, e.g. one new model:
+#   sbatch -A <account> scripts/profile_equates.sbatch --models upt
+# Tables pick this up with
 #   make_tables.py --cv --dataset equates_pilot --profile results/profile_equates.csv ...
 cd "$SLURM_SUBMIT_DIR"   # submit from the repo root
 uv run python scripts/job_storage.py \
   --config configs/data/equates_2019_07_ca12km_fold3.yaml --scope profile-equates -- \
   python scripts/profile_models.py \
   --config configs/data/equates_2019_07_ca12km_fold3.yaml \
-  --out "${AEROCAST_SCRATCH_ROOT:-/fs/scratch/PLS0144/$USER/AeroCast}/outputs/profile-equates/results/profile_equates.csv"
+  --out "${AEROCAST_SCRATCH_ROOT:?export AEROCAST_SCRATCH_ROOT before sbatch}/outputs/profile-equates/results/profile_equates.csv" "$@"

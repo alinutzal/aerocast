@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 import yaml
@@ -44,6 +45,27 @@ def set_dotted(cfg, key, value):
     node[leaf] = value
 
 
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def expand_env(value, where=""):
+    """Replace ${NAME} in config strings with the environment variable NAME. Site storage paths
+    come from the environment this way, so no project's paths are committed. Unset names fail."""
+    if isinstance(value, str):
+        def substitute(match):
+            name = match.group(1)
+            if name not in os.environ:
+                raise ValueError(f"Config value {where or value!r} needs ${name}: export {name} before running "
+                                 "(see README, OSC job storage).")
+            return os.environ[name]
+        return _ENV_REF.sub(substitute, value)
+    if isinstance(value, dict):
+        return {k: expand_env(v, f"{where}.{k}" if where else str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [expand_env(v, where) for v in value]
+    return value
+
+
 def model_file(model):
     """A model config: an existing YAML path, or a name in the repo's configs/models/."""
     path = Path(model)
@@ -68,6 +90,7 @@ def load_config(path, overrides=None, model=None):
         if not sep:
             raise ValueError(f"Override '{item}' must look like section.key=value")
         set_dotted(cfg, key.strip(), yaml.safe_load(raw))
+    cfg = expand_env(cfg)
     # Job staging is applied after user overrides. Preserve scientific identity across
     # scratch/TMPDIR locations and retain original paths for later evaluation.
     if os.environ.get("AEROCAST_DATA_DIR"):

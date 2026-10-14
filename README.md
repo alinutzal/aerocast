@@ -371,9 +371,15 @@ existing cache size and 2 GiB of headroom; otherwise they read scratch. Cache wr
 also use local storage when selected. This capacity estimate is conservative but cannot
 predict every preprocessing workload; request sufficient local storage for your dataset.
 
-Defaults are `/fs/scratch/PLS0144/$USER/AeroCast` for working storage and
-`/fs/ess/PLS0144/AeroCast` for permanent storage. Override them at submission with
-`AEROCAST_SCRATCH_ROOT` and `AEROCAST_PROJECT_ROOT` (export both before `sbatch`).
+Set these environment variables before submitting (export them in the shell that runs `sbatch`;
+Slurm passes the environment on). None has a default, and the configs and scripts refuse to run
+without them:
+- `AEROCAST_SCRATCH_ROOT`: working storage for this project, e.g. `/fs/scratch/<project>/$USER/AeroCast`;
+- `AEROCAST_PROJECT_ROOT`: permanent storage, e.g. `/fs/ess/<project>/AeroCast`;
+- `AEROCAST_EQUATES_DIR`: the EQUATES data directory, e.g. `/fs/ess/<project>/data/aerocast_equates`.
+Configs read their storage paths as `${AEROCAST_EQUATES_DIR}/...`; `${NAME}` in any config value
+expands to that environment variable.
+
 Code and the Python environment remain in home. Submit from the repository root.
 
 Active runs, best checkpoints, metrics, selection JSON, experiment records, and W&B

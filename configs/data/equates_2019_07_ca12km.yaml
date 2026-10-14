@@ -12,6 +12,8 @@
 # clearly outside the read area (~115 km / ~9.6 cells of clearance) rather than right on
 # its edge. See data/pilot_checks/box_preview_v2.png for the box plotted over state lines.
 #
+# Storage paths are read from $AEROCAST_EQUATES_DIR (the EQUATES data directory, e.g.
+# <project storage>/data/aerocast_equates); export it before running. No path is hard-coded.
 # Built by scripts/extract_equates_pilot.py; run `python scripts/extract_equates_pilot.py
 # --config configs/data/equates_2019_07_ca12km.yaml` to (re)populate equates.extracted_dir.
 base: ../base.yaml
@@ -27,12 +29,12 @@ equates:
     col0: 6     # core 64x64 box's first col (of the 459-col CMAQ_12US1 grid)
     size: 64
     ring: 4     # extra cells read on each side for boundary context; read area is 72x72
-  extracted_dir: /fs/ess/PLS0144/data/aerocast_equates/pilot/files
-  cache_dir: /fs/ess/PLS0144/data/aerocast_equates/pilot/kerchunk_cache   # byte-range index cache, not the pipeline's .npz cache
+  extracted_dir: ${AEROCAST_EQUATES_DIR}/pilot/files
+  cache_dir: ${AEROCAST_EQUATES_DIR}/pilot/kerchunk_cache   # byte-range index cache, not the pipeline's .npz cache
 
 data:
   dataset: equates_pilot
-  data_dir: /fs/ess/PLS0144/data/aerocast_equates/pilot/files
+  data_dir: ${AEROCAST_EQUATES_DIR}/pilot/files
   files:
     meteo: "equates_meteo_{date}.nc"
     conc: "equates_conc_{date}.nc"
@@ -45,7 +47,7 @@ data:
   # Both streams are IOAPI SDATE/STIME=2019<julian day>/0, hourly, UTC - no shift needed.
   time_offset_hours: {meteo: 0, conc: 0}
   dates: null
-  cache_dir: /fs/ess/PLS0144/data/aerocast_equates/pilot/npz_cache
+  cache_dir: ${AEROCAST_EQUATES_DIR}/pilot/npz_cache
   local_solar_time: true       # per-cell local solar time (UTC + lon/15); the box spans ~8 deg of longitude
   static_file: static.nc       # relative to data_dir; holds LAT, LON, HT, LWMASK (see DATA_CARD.md)
   inputs:
