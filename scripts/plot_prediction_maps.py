@@ -20,8 +20,8 @@ import numpy as np
 import xarray as xr
 
 LABELS = {"convlstm": "ConvLSTM", "unet": "U-Net", "fno": "FNO", "swin": "SwinUNETR", "swin_unet": "Swin U-Net",
-          "gnn": "GNN", "mamba": "Mamba", "persistence": "Persistence", "climatology": "Climatology"}
-MODELS = ["gnn", "mamba", "swin_unet", "unet", "fno", "convlstm", "swin"]
+          "gnn": "GNN", "mamba": "Mamba", "upt": "UPT", "persistence": "Persistence", "climatology": "Climatology"}
+MODELS = ["gnn", "mamba", "swin_unet", "unet", "fno", "convlstm", "swin", "upt"]
 STATIC = "/fs/ess/PLS0144/data/aerocast_equates/pilot/files/static.nc"
 RING = 4  # boundary cells around the 64x64 core (configs/data/equates_2019_07_ca12km.yaml)
 

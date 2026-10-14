@@ -1,0 +1,22 @@
+# Universal Physics Transformer (Alkin et al. 2024) on the time-stacked input: supernode pooling
+# onto a stride-4 lattice, transformer encoder, a latent rollout over the 10 forecast hours, and a
+# cross-attention decoder queried at every grid cell (with a pointwise local skip; see upt.py).
+model:
+  name: upt
+  dim: 224
+  depth: 3                  # transformer blocks in the encoder and again in the approximator
+  dec_depth: 2              # cross-attention blocks in the decoder
+  num_heads: 4
+  mlp_ratio: 4.0
+  stride: 4                 # one supernode per 4x4 cells
+  radius: 2                 # each supernode gathers a 5x5 neighbourhood
+  local_skip: true
+  grad_checkpointing: false # turn on for the 224x164 BAAQMD grid if the decoder runs out of memory
+  enforce_positive: true    # physical output >= 0 for every channel, exactly (same as fno)
+
+train:
+  amp: bf16
+
+tuning:                     # (dim, depth); every option stays within 5M +/- 20%
+  knob: [dim, depth]
+  options: [[256, 2], [224, 3], [192, 4]]

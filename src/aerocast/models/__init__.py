@@ -13,6 +13,7 @@ from aerocast.models.gnn import MeshGNN
 from aerocast.models.mamba import VMambaForecaster
 from aerocast.models.swin import SwinUNet, SwinUNETRForecaster
 from aerocast.models.unet import UNet
+from aerocast.models.upt import UPTForecaster
 from aerocast.targets import target_channels
 
 
@@ -43,7 +44,7 @@ class ModelSpec:
 
 REGISTRY = {"convlstm": ConvLSTMForecaster, "unet": UNet, "fno": FNOForecaster,
             "swin": SwinUNETRForecaster, "swin_unet": SwinUNet, "gnn": MeshGNN,
-            "mamba": VMambaForecaster}
+            "mamba": VMambaForecaster, "upt": UPTForecaster}
 
 
 def model_spec(cfg):
@@ -73,5 +74,5 @@ def count_parameters(model):
     return sum(p.numel() * (2 if p.is_complex() else 1) for p in model.parameters() if p.requires_grad)
 
 
-__all__ = ["ConvLSTMCell", "ConvLSTMForecaster", "FNOForecaster", "MeshGNN", "ModelSpec", "REGISTRY", "StackedConvLSTM", "SwinUNETRForecaster", "SwinUNet", "UNet", "VMambaForecaster",
+__all__ = ["ConvLSTMCell", "ConvLSTMForecaster", "FNOForecaster", "MeshGNN", "ModelSpec", "REGISTRY", "StackedConvLSTM", "SwinUNETRForecaster", "SwinUNet", "UNet", "UPTForecaster", "VMambaForecaster",
            "build_model", "count_parameters", "model_spec"]

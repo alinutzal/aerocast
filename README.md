@@ -166,6 +166,7 @@ The 2D models stack all hours into channels (266 inputs), pad to what they need 
 | `swin_unet` | Swin U-Net, transformer stages on both sides | 4.82M | built from MONAI's Swin stages |
 | `gnn` | encode-process-decode GNN (PyTorch Geometric) | 4.97M | mesh links 4 and 16 cells apart; along-edge wind per hour |
 | `mamba` | VMamba-style 2D selective scan, patch 4, 4 directions | 4.94M | backend `mamba_ssm` (CUDA) or `mambapy` |
+| `upt` | Universal Physics Transformer: supernode pooling, latent rollout over the 10 hours, per-cell cross-attention decoder | 5.08M | stride-4 supernodes; pointwise local skip in the decoder (`local_skip: false` for the plain UPT); any grid size |
 
 - **Parameter budget:** all within 5M ±20%; complex FNO weights count as two parameters.
 - **Tuning knob:** each `configs/models/<name>.yaml` has one width/depth knob with three options,

@@ -13,7 +13,7 @@ train:
   patience: 20
 
 benchmark:
-  models: [convlstm, unet, fno, swin, swin_unet, gnn, mamba]
+  models: [convlstm, unet, fno, swin, swin_unet, gnn, mamba, upt]
   target_modes: [ox, species, multitask]
   seeds: [42, 43, 44]                   # matches the seeds already used for the per-model CV runs
   parameter_budget: [4.0e+6, 6.0e+6]   # 5M +/- 20%, checked before every run
