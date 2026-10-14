@@ -39,7 +39,7 @@ RUN_RE = re.compile(
     r"|benchmark_equates_fold(?P<fold_new>\d)-final-[a-z_]+-(?P<mode_new>ox|species|multitask)-s\d+_"
 )
 MODELS = ["convlstm", "unet", "fno", "swin", "swin_unet", "gnn", "mamba", "upt"]
-METRICS = ["rmse", "mae", "bias", "pearson_r"]  # unprefixed = Ox, scored for every target mode
+METRICS = ["rmse", "mae", "bias", "pearson_r", "csi_p95"]  # unprefixed = Ox, scored for every target mode
 
 
 def parse_run(run_id, first_pass=False):
@@ -128,8 +128,10 @@ def main():
                        f"{np.max(vals):.3f} | {len(vals)} |")
         print(f"{model}: all-run RMSE mean {np.mean(vals):.3f} +/- {np.std(vals):.3f} (n={len(vals)})")
 
-    for metric in ["mae", "bias", "pearson_r"]:
-        report.append(f"\n## {metric} (mean +/- std over all runs per model)\n")
+    titles = {"csi_p95": "csi_p95 (critical success index for high-Ox cells: Ox above the 95th "
+                          "percentile of training-day Ox; smoothing out peaks is penalized here, not in RMSE)"}
+    for metric in ["mae", "bias", "pearson_r", "csi_p95"]:
+        report.append(f"\n## {titles.get(metric, metric)} (mean +/- std over all runs per model)\n")
         report.append("| model | mean | std |")
         report.append("|---|---|---|")
         for model in models:

@@ -62,6 +62,18 @@ Each fold holds out a different week of July as `test` (with a 5-day `val` block
 | gnn | 0.952 | 0.007 |
 | mamba | 0.947 | 0.010 |
 
+## csi_p95 (critical success index for high-Ox cells: Ox above the 95th percentile of training-day Ox; smoothing out peaks is penalized here, not in RMSE) (mean +/- std over all runs per model)
+
+| model | mean | std |
+|---|---|---|
+| convlstm | 0.346 | 0.081 |
+| unet | 0.305 | 0.095 |
+| fno | 0.335 | 0.119 |
+| swin | 0.271 | 0.042 |
+| swin_unet | 0.337 | 0.141 |
+| gnn | 0.360 | 0.095 |
+| mamba | 0.363 | 0.133 |
+
 ## RMSE by fold, all models
 
 ![cv rmse by fold](cv_rmse_by_fold.png)
