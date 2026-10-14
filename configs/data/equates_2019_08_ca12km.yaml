@@ -1,0 +1,16 @@
+# EQUATES pilot, August 2019: same 72x72 central-California box, variables and output
+# directory as the July pilot (equates_2019_07_ca12km.yaml), so the August day files sit next
+# to July's and a forecast started in late July can run into August. Extracted for the
+# abnormal-weather test (high-Ox stagnation / heat-wave days); dates-mode configs only load
+# the days inside their split blocks, so the July folds are unaffected by the extra files.
+#
+#   python scripts/extract_equates_pilot.py --config configs/data/equates_2019_08_ca12km.yaml
+base: equates_2019_07_ca12km.yaml
+
+equates:
+  month: 8
+  source:
+    conc_key: CMAQ_12US1/OUTPUT/CONC3D/COMBINE_CONC3D_v532_cb6r3_ae7_aq_WR413_MYR_STAGE_2019_12US1_201908.nc
+
+output:
+  note: "pilot: EQUATES 2019-08, CA 72x72"

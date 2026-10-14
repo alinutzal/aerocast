@@ -1,5 +1,5 @@
-"""Extract a pilot dataset for AeroCast from the EPA EQUATES CMAQ run (July 2019, surface
-layer, a 72x72 read area - a 64x64 box plus a 4-cell ring - over central California) from
+"""Extract a pilot dataset for AeroCast from the EPA EQUATES CMAQ run (one month of 2019,
+equates.month, default July; surface layer, a 72x72 read area - a 64x64 box plus a 4-cell ring - over central California) from
 the public S3 buckets epa-equates-v1 (concentrations) and cmas-equates (meteorology).
 
 Never downloads the source files whole: CONC3D (386 GB, netCDF3) is read through a
@@ -8,6 +8,7 @@ each) is read by seeking to the wanted member's byte range (via a seekable s3fs 
 and Python's tarfile) and then reading just that member's HDF5 chunks with h5netcdf.
 
 Usage: python scripts/extract_equates_pilot.py --config configs/data/equates_2019_07_ca12km.yaml
+       python scripts/extract_equates_pilot.py --config configs/data/equates_2019_08_ca12km.yaml
 """
 import argparse
 import io
@@ -28,14 +29,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from aerocast.config import load_config  # noqa: E402
 from aerocast.grid_proj import IoapiGrid  # noqa: E402
 
-CONC_BUCKET_KEY = (
-    "epa-equates-v1",
-    "CMAQ_12US1/OUTPUT/CONC3D/COMBINE_CONC3D_v532_cb6r3_ae7_aq_WR413_MYR_STAGE_2019_12US1_201907.nc",
-)
-MCIP_TAR_TEMPLATE = (
-    "cmas-equates/CMAQ_12US1/INPUT/2019/met/mcip_v51_wrf_v411_noltng/{mon:02d}/"
-    "MCIPv51_WRFv411_noltng_12US1.35L.{date}.tar"
-)
 CONC_VARS = ["NO", "NO2", "O3", "ATOTIJ"]
 MET_VARS = ["TEMP2", "WSPD10", "WDIR10", "PBL", "RGRND", "Q2"]
 STATIC_VARS = ["LAT", "LON", "HT", "LWMASK"]
@@ -46,9 +39,25 @@ SOURCE_GRID = IoapiGrid(
 )
 
 
-def july_days(year=2019, limit=None):
-    days = [np.datetime64(f"{year}-07-{d:02d}") for d in range(1, 32)]
+def month_days(year, month, limit=None):
+    start = np.datetime64(f"{year}-{month:02d}")
+    days = list(np.arange(start, start + np.timedelta64(1, "M"), dtype="datetime64[D]"))
     return days[:limit] if limit else days
+
+
+def month_of(cfg):
+    """(year, month) to extract: equates.month, default July 2019 (the original pilot)."""
+    return 2019, int(cfg["equates"].get("month", 7))
+
+
+def conc_url(cfg):
+    src = cfg["equates"]["source"]
+    return f"s3://{src['conc_bucket']}/{src['conc_key']}"
+
+
+def mcip_tar_key(cfg, mon, date):
+    src = cfg["equates"]["source"]
+    return f"{src['met_bucket']}/" + src["met_tar_template"].format(mon=mon, date=date)
 
 
 def julian(day):
@@ -112,9 +121,7 @@ def write_ioapi_file(path, day, grid, var_units, data, extra_attrs=None):
 # CONC3D (concentrations)
 # ---------------------------------------------------------------------------
 
-def build_conc_zarr_view(cache_path):
-    bucket, key = CONC_BUCKET_KEY
-    url = f"s3://{bucket}/{key}"
+def build_conc_zarr_view(url, cache_path):
     if cache_path.exists():
         with open(cache_path) as f:
             refs = json.load(f)
@@ -148,12 +155,16 @@ def extract_conc(cfg, grid_sub, out_dir, cache_dir, limit_days=None):
     row0, row1 = box["row0"] - box["ring"], box["row0"] + box["size"] + box["ring"]
     col0, col1 = box["col0"] - box["ring"], box["col0"] + box["size"] + box["ring"]
 
-    ds = build_conc_zarr_view(cache_dir / "conc3d_refs.json")
+    year, month = month_of(cfg)
+    # July keeps its original cache name so the existing index is reused.
+    refs = "conc3d_refs.json" if month == 7 else f"conc3d_refs_{year}{month:02d}.json"
+    ds = build_conc_zarr_view(conc_url(cfg), cache_dir / refs)
     validate_conc_subset(ds, row0, row1, col0, col1)
 
-    n_hours = ds.sizes["TSTEP"] - 1  # drop the trailing Aug 1 00Z record
-    assert n_hours == 31 * 24, n_hours
-    days = july_days(limit=limit_days)
+    all_days = month_days(year, month)
+    n_hours = ds.sizes["TSTEP"] - 1  # drop the trailing 00Z record of the next month
+    assert n_hours == len(all_days) * 24, n_hours
+    days = month_days(year, month, limit=limit_days)
     var_units = {}
 
     sub = ds[CONC_VARS].isel(TSTEP=slice(0, n_hours), LAY=0,
@@ -234,10 +245,10 @@ def open_tar_member(fs, tar_key, member_name):
     return h5netcdf.File(sub, mode="r"), base
 
 
-def extract_static(fs, grid_sub, row0, row1, col0, col1, out_path):
+def extract_static(fs, cfg, grid_sub, row0, row1, col0, col1, out_path):
     if out_path.exists():
         return out_path
-    tar_key = MCIP_TAR_TEMPLATE.format(mon=7, date="20190701")
+    tar_key = mcip_tar_key(cfg, 7, "20190701")
     h5, base = open_tar_member(fs, tar_key, "GRIDCRO2D_20190701.nc4")
     data = {}
     var_units = {}
@@ -259,9 +270,10 @@ def extract_met(fs, cfg, grid_sub, out_dir, limit_days=None):
     row0, row1 = box["row0"] - box["ring"], box["row0"] + box["size"] + box["ring"]
     col0, col1 = box["col0"] - box["ring"], box["col0"] + box["size"] + box["ring"]
 
-    extract_static(fs, grid_sub, row0, row1, col0, col1, out_dir / "static.nc")
+    extract_static(fs, cfg, grid_sub, row0, row1, col0, col1, out_dir / "static.nc")
 
-    days = july_days(limit=limit_days)
+    year, month = month_of(cfg)
+    days = month_days(year, month, limit=limit_days)
     written = []
     var_units = {}
     for day in days:
@@ -271,7 +283,7 @@ def extract_met(fs, cfg, grid_sub, out_dir, limit_days=None):
             written.append(out_path)
             continue
         t0 = time.time()
-        tar_key = MCIP_TAR_TEMPLATE.format(mon=7, date=stamp)
+        tar_key = mcip_tar_key(cfg, month, stamp)
         h5, base = open_tar_member(fs, tar_key, f"METCRO2D_{stamp}.nc4")
         data = {}
         for v in MET_VARS:
@@ -292,7 +304,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--only", choices=["conc", "met", "both"], default="both")
-    ap.add_argument("--limit-days", type=int, default=None, help="only extract the first N days of July (for testing)")
+    ap.add_argument("--limit-days", type=int, default=None, help="only extract the first N days of the month (for testing)")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
