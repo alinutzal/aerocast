@@ -327,16 +327,19 @@ def load_hourly(data_cfg, features_cfg, days):
                       grid_channels(layout["static"], height, width), targets, layout, target_units.pop())
 
 
-def window_starts(times, seq_len, pred_len, labels=None, label=None):
+def window_starts(times, seq_len, pred_len, labels=None, label=None, target_only=False):
     """Index t of the first target hour of every window whose hours t-seq_len .. t+pred_len-1
-    are consecutive and, if labels are given, all equal to `label`."""
+    are consecutive and, if labels are given, all equal to `label`. With target_only, only the
+    target hours t .. t+pred_len-1 must carry the label: the input hours are past observations
+    and may come from another split."""
     span = seq_len + pred_len
     starts = []
     for s in range(len(times) - span + 1):
         end = s + span - 1
         if times[end] - times[s] != (span - 1) * HOUR:
             continue
-        if labels is not None and not np.all(labels[s:end + 1] == label):
+        first_checked = s + seq_len if target_only else s
+        if labels is not None and not np.all(labels[first_checked:end + 1] == label):
             continue
         starts.append(s + seq_len)
     return np.asarray(starts, dtype=np.int64)

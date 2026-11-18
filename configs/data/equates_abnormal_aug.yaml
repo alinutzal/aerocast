@@ -1,0 +1,25 @@
+# Abnormal-weather test on the EQUATES pilot: short-term Ox forecasts for stagnation / heat-wave
+# days in late August, from the 7 days (168 h) before each day, using meteorology and past
+# concentrations (no emissions). Test days are Aug 27-29 (candidates from
+# scripts/abnormal_weather_candidates.py; Ling picks the final set). Targets are 24 h, so each
+# window predicts one full day. Fire-affected days are not excluded here: no fire record is in
+# the repository (see README), so the choice of training days still needs checking against one.
+#
+# Input history crosses split boundaries (split.inputs_from_any_split): input hours are past
+# observations, and only the target hours must lie inside one split, so no target information
+# reaches training or validation. Buffers: Aug 19 and Aug 24-26 hold no target windows.
+base: equates_2019_07_ca12km.yaml
+
+data:
+  seq_len: 168   # 7 days of history before the first target hour
+  pred_len: 24   # one full day of targets per window
+
+split:
+  mode: dates
+  inputs_from_any_split: true
+  train: ["2019-07-01", "2019-08-18"]
+  val: ["2019-08-20", "2019-08-23"]
+  test: ["2019-08-27", "2019-08-29"]
+
+output:
+  note: "abnormal-weather test: Aug 27-29 targets, 7-day input, 24 h horizon"

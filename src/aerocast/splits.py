@@ -3,7 +3,10 @@
 Modes (split.mode):
   dates       honest split: every hour takes the split of its file date, and a window is
               kept only if all its input and target hours share one split, so no window
-              crosses a split boundary.
+              crosses a split boundary. With split.inputs_from_any_split: true, only the
+              target hours must share a split; the input history may come from earlier days
+              in another split (past observations, so no target information leaks), and all
+              days are loaded so the history is available.
   smoke_test  single-day pipeline check: train, early stopping and evaluation all use
               every window. Rows are labelled smoke_test, never test.
   legacy      refactor check against legacy/grid_forcast.py: same windows as smoke_test,
@@ -72,7 +75,7 @@ def days_to_load(data_cfg, split_cfg):
         days = sorted({to_day(d) for d in data_cfg["dates"]})
     else:
         days = available_days(data_cfg)
-        if split_cfg["mode"] == "dates":
+        if split_cfg["mode"] == "dates" and not split_cfg.get("inputs_from_any_split"):
             blocks = [b for name in SPLITS for b in date_blocks(split_cfg.get(name))]
             days = [d for d in days if any(start <= d <= end for start, end in blocks)]
     if not days:
@@ -85,7 +88,8 @@ def make_splits(hourly, split_cfg, seq_len, pred_len):
     if mode == "dates":
         check_blocks(split_cfg)
         labels = hour_labels(hourly.days, split_cfg)
-        windows = {name: window_starts(hourly.times, seq_len, pred_len, labels, name) for name in SPLITS}
+        target_only = bool(split_cfg.get("inputs_from_any_split", False))
+        windows = {name: window_starts(hourly.times, seq_len, pred_len, labels, name, target_only) for name in SPLITS}
         empty = [name for name in SPLITS if len(windows[name]) == 0]
         if empty:
             loaded = sorted({str(d) for d in hourly.days})

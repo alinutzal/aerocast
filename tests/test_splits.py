@@ -51,3 +51,20 @@ def test_conc_time_offset_aligns_the_files(make_cfg):
     with pytest.warns(UserWarning, match="only 16 hours"):
         hourly, _ = load_and_split(cfg)
     assert len(hourly.times) == 3 * 16
+
+
+def test_inputs_from_any_split_keeps_windows_whose_history_is_in_another_split():
+    import numpy as np
+    from aerocast.data import HOUR, window_starts
+
+    times = np.arange(10 * 24) * HOUR + np.datetime64("2019-08-01T00", "h")
+    labels = np.array(["train"] * (6 * 24) + [""] * 24 + ["test"] * (3 * 24), dtype=object)
+    strict = window_starts(times, 168, 24, labels, "test")
+    relaxed = window_starts(times, 168, 24, labels, "test", target_only=True)
+    # Strict: the history (168 h) of a test window must be inside test, so none qualify.
+    assert len(strict) == 0
+    # Relaxed: any target start on the test days whose targets fit in the test block qualifies,
+    # and the history may reach back across the buffer and the train days.
+    assert len(relaxed) > 0
+    assert all(labels[t:t + 24].tolist() == ["test"] * 24 for t in relaxed)
+    assert min(relaxed) - 168 < 6 * 24 + 24  # the history reaches into the earlier days
