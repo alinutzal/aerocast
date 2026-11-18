@@ -90,13 +90,14 @@ def test_conc_subset_matches_full_field_read():
     pytest.importorskip("kerchunk")
     from extract_equates_pilot import build_conc_zarr_view, validate_conc_subset
 
-    _, box = _load_pilot_cfg()
+    cfg, box = _load_pilot_cfg()
     row0 = box["row0"] - box["ring"]
     row1 = box["row0"] + box["size"] + box["ring"]
     col0 = box["col0"] - box["ring"]
     col1 = box["col0"] + box["size"] + box["ring"]
 
     import tempfile
+    from extract_equates_pilot import conc_url
     with tempfile.TemporaryDirectory() as tmp:
-        ds = build_conc_zarr_view(Path(tmp) / "refs.json")
+        ds = build_conc_zarr_view(conc_url(cfg), Path(tmp) / "refs.json")
         validate_conc_subset(ds, row0, row1, col0, col1, hour_index=0)
